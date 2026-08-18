@@ -1,0 +1,20 @@
+{
+  "name": "@dreame/custom-data-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sync Shopify metafield and metaobject definitions between stores",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "sync": "node sync.mjs",
+    "sync:dry-run": "node sync.mjs --dry-run",
+    "sync:metaobjects": "node sync.mjs --only metaobjects",
+    "sync:metafields": "node sync.mjs --only metafields",
+    "sync:product": "node sync-product.mjs",
+    "sync:template-suffix": "node sync-template-suffix.mjs",
+    "sync:menu": "node sync-menu.mjs",
+    "sync:template-files": "node sync-template-files.mjs"
+  }
+}

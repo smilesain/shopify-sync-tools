@@ -1,0 +1,21 @@
+# 依赖与本地凭证（切勿提交 Token）
+.env
+.env.*
+!.env.example
+
+**/node_modules/
+
+# 同步台本机店铺配置
+sync-console/data/*.json
+!sync-console/data/.gitkeep
+
+# 本地运行报告
+custom-data-sync/reports/*.json
+!custom-data-sync/reports/.gitkeep
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

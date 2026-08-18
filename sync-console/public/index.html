@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shopify Sync Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Custom Data Sync</p>
+          <h1>子站点素材同步台</h1>
+        </div>
+        <div class="top-meta" id="connectionMeta">加载配置中…</div>
+      </header>
+
+      <main class="grid">
+        <section class="panel">
+          <h2>0. 店铺配置</h2>
+          <p class="hint">凭证保存在本机 <code>sync-console/data/</code>，不会回传明文 token。</p>
+
+          <div class="pair-row">
+            <div class="field-block">
+              <label for="sourceSelect">源站 Source</label>
+              <select id="sourceSelect"></select>
+            </div>
+            <div class="field-block">
+              <label for="targetSelect">目标站 Target</label>
+              <select id="targetSelect"></select>
+            </div>
+          </div>
+          <div class="actions compact">
+            <button type="button" class="ghost" id="swapBtn">交换源/目标</button>
+            <button type="button" class="ghost" id="importEnvBtn">从 .env 导入</button>
+          </div>
+
+          <details class="store-manager" open>
+            <summary>管理店铺列表</summary>
+            <ul class="store-list" id="storeList"></ul>
+
+            <form id="storeForm" class="store-form">
+              <input type="hidden" id="editStoreId" value="" />
+              <div class="field-block">
+                <label for="storeName">显示名称</label>
+                <input id="storeName" type="text" placeholder="Sainstore" required />
+              </div>
+              <div class="field-block">
+                <label for="storeShop">店铺域名</label>
+                <input id="storeShop" type="text" placeholder="example.myshopify.com" required />
+              </div>
+              <div class="field-block">
+                <label for="storeToken">Admin API access token</label>
+                <input
+                  id="storeToken"
+                  type="password"
+                  placeholder="shpat_ / shpca_ / shpua_…"
+                  autocomplete="off"
+                />
+              </div>
+              <p class="hint">新建必填 Token；编辑时留空表示不修改已保存的 Token。</p>
+              <div class="actions compact">
+                <button type="submit" class="primary" id="saveStoreBtn">保存店铺</button>
+                <button type="button" class="ghost" id="resetStoreForm">清空表单</button>
+              </div>
+            </form>
+          </details>
+
+          <h2>1. 同步模块</h2>
+          <div class="module-list" id="moduleList">
+            <label class="mod"><input type="checkbox" name="module" value="metaobjects" checked /> Metaobject 定义</label>
+            <label class="mod"><input type="checkbox" name="module" value="metafields" checked /> Metafield 定义</label>
+            <label class="mod"><input type="checkbox" name="module" value="menu" /> Menu 菜单</label>
+            <label class="mod"><input type="checkbox" name="module" value="page" /> Page 页面（如 About Us）</label>
+            <label class="mod"><input type="checkbox" name="module" value="article" /> Blog 文章（Article）</label>
+            <label class="mod"><input type="checkbox" name="module" value="collection" /> Collection 集合</label>
+            <label class="mod"><input type="checkbox" name="module" value="product" /> Product 产品</label>
+            <label class="mod"><input type="checkbox" name="module" value="template-files" /> Template 图片 Files</label>
+            <label class="mod"><input type="checkbox" name="module" value="template-videos" /> Template 视频 Files</label>
+          </div>
+
+          <div class="field-block">
+            <label for="menuHandle">Menu handle</label>
+            <input id="menuHandle" type="text" placeholder="main-menu" />
+          </div>
+          <div class="field-block">
+            <label for="pageHandle">Page handle</label>
+            <input id="pageHandle" type="text" value="about-us" placeholder="about-us" />
+          </div>
+          <div class="field-block">
+            <label for="articleHandle">Blog article handle</label>
+            <input id="articleHandle" type="text" value="test" placeholder="test" />
+            <label class="dry" style="margin-top: 8px">
+              <input type="checkbox" id="articleSyncAll" />
+              一次性同步源站全部 Blog 文章（忽略上方单个 handle）
+            </label>
+          </div>
+          <div class="field-block">
+            <label for="collectionHandle">Collection handle</label>
+            <input id="collectionHandle" type="text" value="robot-vacuums" placeholder="robot-vacuums" />
+          </div>
+          <div class="field-block">
+            <label for="productIds">Product ID（可多个）</label>
+            <textarea
+              id="productIds"
+              rows="3"
+              placeholder="7549570941137&#10;7549570941138&#10;或逗号分隔: 111,222,333"
+            ></textarea>
+            <p class="hint">支持换行 / 逗号 / 空格分隔多个数字 ID；会按顺序逐个同步。</p>
+          </div>
+
+          <h2>2. Templates</h2>
+          <p class="hint">扫描本地 JSON 内的 <code>shopify://shop_images/</code> 与 <code>shopify://files/videos/</code>。可自定义主题 <code>templates</code> 目录，不必把工具放进主题包。</p>
+          <div class="field-block">
+            <label for="templatesDir">Templates 目录（本机绝对路径）</label>
+            <div class="template-toolbar">
+              <input id="templatesDir" type="text" placeholder="E:\path\to\theme\templates" />
+              <button type="button" class="ghost" id="scanTemplatesBtn">扫描目录</button>
+            </div>
+            <p class="hint" id="templatesDirMeta">尚未扫描</p>
+          </div>
+          <div class="field-block">
+            <label for="templatePaths">额外 JSON 文件路径（可选）</label>
+            <textarea
+              id="templatePaths"
+              rows="2"
+              placeholder="E:\theme\templates\product.foo.json&#10;也可只填文件名（相对上方目录）"
+            ></textarea>
+          </div>
+          <div class="template-toolbar">
+            <input id="templateFilter" type="search" placeholder="筛选模板文件名…" />
+            <button type="button" class="ghost" id="selectVisible">全选可见</button>
+            <button type="button" class="ghost" id="clearTemplates">清空勾选</button>
+          </div>
+          <div class="template-list" id="templateList"></div>
+
+          <h2>3. 执行</h2>
+          <label class="dry">
+            <input type="checkbox" id="dryRun" checked />
+            Dry run（只预览，不写入目标站）
+          </label>
+          <div class="actions">
+            <button type="button" class="primary" id="startBtn">开始同步</button>
+            <button type="button" class="danger" id="cancelBtn" disabled>取消</button>
+          </div>
+          <p class="hint" id="formError" hidden></p>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="log-head">
+            <h2>运行日志</h2>
+            <span class="badge" id="jobBadge">idle</span>
+          </div>
+          <pre class="log" id="logView">等待任务…</pre>
+          <div class="job-meta" id="jobMeta"></div>
+
+          <h2 class="reports-title">最近报告</h2>
+          <ul class="reports" id="reportList"></ul>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
