@@ -300,14 +300,40 @@ function buildSteps(payload) {
     });
   }
 
-  if (modules.includes('menu')) {
-    const handle = String(payload.menuHandle || '').trim();
-    if (!handle) throw new Error('menuHandle is required when syncing menus');
+  if (modules.includes('product')) {
+    const raw =
+      payload.productIds ??
+      payload.productId ??
+      '';
+    const productIds = String(raw)
+      .split(/[\s,;]+/)
+      .map((id) => id.trim().replace(/^gid:\/\/shopify\/Product\//i, ''))
+      .filter(Boolean);
+    const uniqueIds = [...new Set(productIds)];
+    if (!uniqueIds.length) {
+      throw new Error('Enter at least one numeric Shopify product ID');
+    }
+    const invalid = uniqueIds.filter((id) => !/^\d+$/.test(id));
+    if (invalid.length) {
+      throw new Error(`Invalid product ID(s): ${invalid.join(', ')}`);
+    }
+    for (const productId of uniqueIds) {
+      steps.push({
+        id: `product-${productId}`,
+        label: `Product: ${productId}`,
+        command: process.execPath,
+        args: ['sync-product.mjs', productId, ...dryArgs],
+      });
+    }
+  }
+
+  if (modules.includes('collection')) {
+    const handle = String(payload.collectionHandle || 'robot-vacuums').trim() || 'robot-vacuums';
     steps.push({
-      id: 'menu',
-      label: `Menu: ${handle}`,
+      id: 'collection',
+      label: `Collection: ${handle}`,
       command: process.execPath,
-      args: ['sync-menu.mjs', handle, ...dryArgs],
+      args: ['sync-collection.mjs', handle, ...dryArgs],
     });
   }
 
@@ -341,41 +367,15 @@ function buildSteps(payload) {
     }
   }
 
-  if (modules.includes('collection')) {
-    const handle = String(payload.collectionHandle || 'robot-vacuums').trim() || 'robot-vacuums';
+  if (modules.includes('menu')) {
+    const handle = String(payload.menuHandle || '').trim();
+    if (!handle) throw new Error('menuHandle is required when syncing menus');
     steps.push({
-      id: 'collection',
-      label: `Collection: ${handle}`,
+      id: 'menu',
+      label: `Menu: ${handle}`,
       command: process.execPath,
-      args: ['sync-collection.mjs', handle, ...dryArgs],
+      args: ['sync-menu.mjs', handle, ...dryArgs],
     });
-  }
-
-  if (modules.includes('product')) {
-    const raw =
-      payload.productIds ??
-      payload.productId ??
-      '';
-    const productIds = String(raw)
-      .split(/[\s,;]+/)
-      .map((id) => id.trim().replace(/^gid:\/\/shopify\/Product\//i, ''))
-      .filter(Boolean);
-    const uniqueIds = [...new Set(productIds)];
-    if (!uniqueIds.length) {
-      throw new Error('Enter at least one numeric Shopify product ID');
-    }
-    const invalid = uniqueIds.filter((id) => !/^\d+$/.test(id));
-    if (invalid.length) {
-      throw new Error(`Invalid product ID(s): ${invalid.join(', ')}`);
-    }
-    for (const productId of uniqueIds) {
-      steps.push({
-        id: `product-${productId}`,
-        label: `Product: ${productId}`,
-        command: process.execPath,
-        args: ['sync-product.mjs', productId, ...dryArgs],
-      });
-    }
   }
 
   if (modules.includes('template-files')) {

@@ -68,21 +68,31 @@
           </details>
 
           <h2>1. 同步模块</h2>
+          <p class="hint">按新建站依赖顺序排列。新店建议先定义，再产品，再集合/内容，最后模板文件。默认不勾选，请按需勾选。</p>
           <div class="module-list" id="moduleList">
-            <label class="mod"><input type="checkbox" name="module" value="metaobjects" checked /> Metaobject 定义</label>
-            <label class="mod"><input type="checkbox" name="module" value="metafields" checked /> Metafield 定义</label>
-            <label class="mod"><input type="checkbox" name="module" value="menu" /> Menu 菜单</label>
+            <label class="mod"><input type="checkbox" name="module" value="metaobjects" /> Metaobject 定义</label>
+            <label class="mod"><input type="checkbox" name="module" value="metafields" /> Metafield 定义</label>
+            <label class="mod"><input type="checkbox" name="module" value="product" /> Product 产品</label>
+            <label class="mod"><input type="checkbox" name="module" value="collection" /> Collection 集合</label>
             <label class="mod"><input type="checkbox" name="module" value="page" /> Page 页面（如 About Us）</label>
             <label class="mod"><input type="checkbox" name="module" value="article" /> Blog 文章（Article）</label>
-            <label class="mod"><input type="checkbox" name="module" value="collection" /> Collection 集合</label>
-            <label class="mod"><input type="checkbox" name="module" value="product" /> Product 产品</label>
+            <label class="mod"><input type="checkbox" name="module" value="menu" /> Menu 菜单</label>
             <label class="mod"><input type="checkbox" name="module" value="template-files" /> Template 图片 Files</label>
             <label class="mod"><input type="checkbox" name="module" value="template-videos" /> Template 视频 Files</label>
           </div>
 
           <div class="field-block">
-            <label for="menuHandle">Menu handle</label>
-            <input id="menuHandle" type="text" placeholder="main-menu" />
+            <label for="productIds">Product ID（可多个）</label>
+            <textarea
+              id="productIds"
+              rows="3"
+              placeholder="7549570941137&#10;7549570941138&#10;或逗号分隔: 111,222,333"
+            ></textarea>
+            <p class="hint">支持换行 / 逗号 / 空格分隔多个数字 ID；会按顺序逐个同步。</p>
+          </div>
+          <div class="field-block">
+            <label for="collectionHandle">Collection handle</label>
+            <input id="collectionHandle" type="text" value="robot-vacuums" placeholder="robot-vacuums" />
           </div>
           <div class="field-block">
             <label for="pageHandle">Page handle</label>
@@ -97,17 +107,8 @@
             </label>
           </div>
           <div class="field-block">
-            <label for="collectionHandle">Collection handle</label>
-            <input id="collectionHandle" type="text" value="robot-vacuums" placeholder="robot-vacuums" />
-          </div>
-          <div class="field-block">
-            <label for="productIds">Product ID（可多个）</label>
-            <textarea
-              id="productIds"
-              rows="3"
-              placeholder="7549570941137&#10;7549570941138&#10;或逗号分隔: 111,222,333"
-            ></textarea>
-            <p class="hint">支持换行 / 逗号 / 空格分隔多个数字 ID；会按顺序逐个同步。</p>
+            <label for="menuHandle">Menu handle</label>
+            <input id="menuHandle" type="text" placeholder="main-menu" />
           </div>
 
           <h2>2. Templates</h2>
