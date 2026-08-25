@@ -33,6 +33,13 @@ import {
   toPublicStore,
   upsertStore,
 } from './lib/stores.mjs';
+import {
+  pickJobInputs,
+  plannedSteps,
+  readReportJson,
+  reportListItem,
+  writeJobReport,
+} from './lib/job-report.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -61,6 +68,9 @@ const jobs = new Map();
  *   finishedAt?: string,
  *   exitCode?: number | null,
  *   logs: string[],
+ *   steps: object[],
+ *   inputs?: object,
+ *   reportName?: string,
  *   listeners: Set<(line: string) => void>,
  *   child?: import('node:child_process').ChildProcess,
  *   env?: Record<string, string | undefined>,
@@ -196,11 +206,7 @@ function listReports() {
     .map((name) => {
       const full = join(REPORTS_DIR, name);
       const st = statSync(full);
-      return {
-        name,
-        size: st.size,
-        mtime: st.mtime.toISOString(),
-      };
+      return reportListItem(name, st, readReportJson(full));
     })
     .sort((a, b) => (a.mtime < b.mtime ? 1 : -1))
     .slice(0, 40);
@@ -301,50 +307,80 @@ function buildSteps(payload) {
   }
 
   if (modules.includes('product')) {
-    const raw =
-      payload.productIds ??
-      payload.productId ??
-      '';
-    const productIds = String(raw)
-      .split(/[\s,;]+/)
-      .map((id) => id.trim().replace(/^gid:\/\/shopify\/Product\//i, ''))
-      .filter(Boolean);
-    const uniqueIds = [...new Set(productIds)];
-    if (!uniqueIds.length) {
-      throw new Error('Enter at least one numeric Shopify product ID');
-    }
-    const invalid = uniqueIds.filter((id) => !/^\d+$/.test(id));
-    if (invalid.length) {
-      throw new Error(`Invalid product ID(s): ${invalid.join(', ')}`);
-    }
-    for (const productId of uniqueIds) {
+    const syncAllProducts = Boolean(payload.productSyncAll);
+    if (syncAllProducts) {
       steps.push({
-        id: `product-${productId}`,
-        label: `Product: ${productId}`,
+        id: 'product-all',
+        label: 'Products: ALL',
         command: process.execPath,
-        args: ['sync-product.mjs', productId, ...dryArgs],
+        args: ['sync-product.mjs', '--all', ...dryArgs],
       });
+    } else {
+      const raw =
+        payload.productIds ??
+        payload.productId ??
+        '';
+      const productIds = String(raw)
+        .split(/[\s,;]+/)
+        .map((id) => id.trim().replace(/^gid:\/\/shopify\/Product\//i, ''))
+        .filter(Boolean);
+      const uniqueIds = [...new Set(productIds)];
+      if (!uniqueIds.length) {
+        throw new Error('Enter at least one numeric Shopify product ID');
+      }
+      const invalid = uniqueIds.filter((id) => !/^\d+$/.test(id));
+      if (invalid.length) {
+        throw new Error(`Invalid product ID(s): ${invalid.join(', ')}`);
+      }
+      for (const productId of uniqueIds) {
+        steps.push({
+          id: `product-${productId}`,
+          label: `Product: ${productId}`,
+          command: process.execPath,
+          args: ['sync-product.mjs', productId, ...dryArgs],
+        });
+      }
     }
   }
 
   if (modules.includes('collection')) {
-    const handle = String(payload.collectionHandle || 'robot-vacuums').trim() || 'robot-vacuums';
-    steps.push({
-      id: 'collection',
-      label: `Collection: ${handle}`,
-      command: process.execPath,
-      args: ['sync-collection.mjs', handle, ...dryArgs],
-    });
+    const syncAllCollections = Boolean(payload.collectionSyncAll);
+    if (syncAllCollections) {
+      steps.push({
+        id: 'collection-all',
+        label: 'Collections: ALL',
+        command: process.execPath,
+        args: ['sync-collection.mjs', '--all', ...dryArgs],
+      });
+    } else {
+      const handle = String(payload.collectionHandle || 'robot-vacuums').trim() || 'robot-vacuums';
+      steps.push({
+        id: 'collection',
+        label: `Collection: ${handle}`,
+        command: process.execPath,
+        args: ['sync-collection.mjs', handle, ...dryArgs],
+      });
+    }
   }
 
   if (modules.includes('page')) {
-    const handle = String(payload.pageHandle || 'about-us').trim() || 'about-us';
-    steps.push({
-      id: 'page',
-      label: `Page: ${handle}`,
-      command: process.execPath,
-      args: ['sync-page.mjs', handle, ...dryArgs],
-    });
+    const syncAllPages = Boolean(payload.pageSyncAll);
+    if (syncAllPages) {
+      steps.push({
+        id: 'page-all',
+        label: 'Pages: ALL',
+        command: process.execPath,
+        args: ['sync-page.mjs', '--all', ...dryArgs],
+      });
+    } else {
+      const handle = String(payload.pageHandle || 'about-us').trim() || 'about-us';
+      steps.push({
+        id: 'page',
+        label: `Page: ${handle}`,
+        command: process.execPath,
+        args: ['sync-page.mjs', handle, ...dryArgs],
+      });
+    }
   }
 
   if (modules.includes('article')) {
@@ -368,14 +404,24 @@ function buildSteps(payload) {
   }
 
   if (modules.includes('menu')) {
-    const handle = String(payload.menuHandle || '').trim();
-    if (!handle) throw new Error('menuHandle is required when syncing menus');
-    steps.push({
-      id: 'menu',
-      label: `Menu: ${handle}`,
-      command: process.execPath,
-      args: ['sync-menu.mjs', handle, ...dryArgs],
-    });
+    const syncAllMenus = Boolean(payload.menuSyncAll);
+    if (syncAllMenus) {
+      steps.push({
+        id: 'menu-all',
+        label: 'Menus: ALL',
+        command: process.execPath,
+        args: ['sync-menu.mjs', '--all', ...dryArgs],
+      });
+    } else {
+      const handle = String(payload.menuHandle || '').trim();
+      if (!handle) throw new Error('menuHandle is required when syncing menus');
+      steps.push({
+        id: 'menu',
+        label: `Menu: ${handle}`,
+        command: process.execPath,
+        args: ['sync-menu.mjs', handle, ...dryArgs],
+      });
+    }
   }
 
   if (modules.includes('template-files')) {
@@ -421,6 +467,28 @@ function resolvePair(payload) {
   return { source, target, sourceId, targetId };
 }
 
+function findStepRecord(job, stepId) {
+  return (job.steps || []).find((item) => item.id === stepId);
+}
+
+function markRemainingSteps(job, status) {
+  for (const record of job.steps || []) {
+    if (record.status === 'pending' || record.status === 'running') {
+      record.status = status;
+    }
+  }
+}
+
+function persistJobReport(job) {
+  try {
+    const { name, path } = writeJobReport(job, REPORTS_DIR);
+    job.reportName = name;
+    appendLog(job, `Job report written to ${path}`);
+  } catch (error) {
+    appendLog(job, `WARN: failed to write job report: ${error.message}`);
+  }
+}
+
 function runCommand(job, step) {
   return new Promise((resolvePromise) => {
     appendLog(job, `\n▶ ${step.label}`);
@@ -453,10 +521,33 @@ async function runJob(job, steps) {
   let failed = false;
 
   for (const step of steps) {
-    if (job.status === 'cancelled') break;
+    const record = findStepRecord(job, step.id);
+    if (job.status === 'cancelled') {
+      markRemainingSteps(job, 'cancelled');
+      break;
+    }
+    if (record) {
+      record.status = 'running';
+      record.startedAt = new Date().toISOString();
+    }
     const code = await runCommand(job, step);
+    if (record) {
+      record.finishedAt = new Date().toISOString();
+      record.exitCode = code;
+      const started = Date.parse(record.startedAt);
+      const finished = Date.parse(record.finishedAt);
+      record.durationMs =
+        Number.isFinite(started) && Number.isFinite(finished) ? Math.max(0, finished - started) : null;
+      if (job.status === 'cancelled') record.status = 'cancelled';
+      else record.status = code === 0 ? 'success' : 'failed';
+    }
+    if (job.status === 'cancelled') {
+      markRemainingSteps(job, 'cancelled');
+      break;
+    }
     if (code !== 0) {
       failed = true;
+      markRemainingSteps(job, 'skipped');
       appendLog(job, `Step failed: ${step.id}`);
       break;
     }
@@ -464,6 +555,7 @@ async function runJob(job, steps) {
 
   job.finishedAt = new Date().toISOString();
   if (job.status === 'cancelled') {
+    job.exitCode = job.exitCode ?? 1;
     appendLog(job, 'Job cancelled');
   } else if (failed) {
     job.status = 'failed';
@@ -475,6 +567,7 @@ async function runJob(job, steps) {
     appendLog(job, 'Job completed');
   }
 
+  persistJobReport(job);
   for (const listener of job.listeners) listener('__DONE__');
 }
 
@@ -490,6 +583,7 @@ function jobPublic(job) {
     finishedAt: job.finishedAt || null,
     exitCode: job.exitCode ?? null,
     logCount: job.logs.length,
+    reportName: job.reportName || null,
   };
 }
 
@@ -713,6 +807,8 @@ async function handleApi(req, res, url) {
       targetShop: pair.target.shop,
       startedAt: new Date().toISOString(),
       logs: [],
+      steps: plannedSteps(steps),
+      inputs: pickJobInputs(payload),
       listeners: new Set(),
       env: jobEnv,
     };
@@ -726,7 +822,10 @@ async function handleApi(req, res, url) {
       runJob(job, steps).catch((error) => {
         job.status = 'failed';
         job.finishedAt = new Date().toISOString();
+        job.exitCode = 1;
+        markRemainingSteps(job, 'skipped');
         appendLog(job, `FATAL: ${error.message}`);
+        persistJobReport(job);
         for (const listener of job.listeners) listener('__DONE__');
       });
     });

@@ -1,9 +1,21 @@
+#!/usr/bin/env node
+/**
+ * Sync Menu(s) from source → target.
+ *
+ * Usage:
+ *   node sync-menu.mjs [menu-handle] [--dry-run]
+ *   node sync-menu.mjs --all [--dry-run]
+ */
+
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient } from './lib/shopify-client.mjs';
 
-const MENU_HANDLE = process.argv[2] || 'new-main-menu-2026-test';
-const dryRun = process.argv.includes('--dry-run');
+const rawArgs = process.argv.slice(2);
+const dryRun = rawArgs.includes('--dry-run');
+const syncAll = rawArgs.includes('--all');
+const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
+const MENU_HANDLE = (args[0] || 'new-main-menu-2026-test').trim();
 
 const MENU_ITEM_FRAGMENT = `
   fragment MenuItemFields on MenuItem {
@@ -43,6 +55,18 @@ const MENU_ITEM_FRAGMENT = `
 const LIST_MENUS = `
   query ListMenus($query: String) {
     menus(first: 20, query: $query) {
+      nodes { id handle title }
+    }
+  }
+`;
+
+const LIST_ALL_MENUS = `
+  query ListAllMenus($cursor: String) {
+    menus(first: 50, after: $cursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes { id handle title }
     }
   }
@@ -133,6 +157,29 @@ async function fetchMenuByHandle(client, handle) {
   return payload.data?.menu || null;
 }
 
+async function fetchMenuById(client, id) {
+  const payload = await client.query(FETCH_MENU, { id });
+  return payload.data?.menu || null;
+}
+
+async function listAllSourceMenus(sourceClient) {
+  const menus = [];
+  let cursor = null;
+  let page = 0;
+
+  do {
+    page += 1;
+    const payload = await sourceClient.query(LIST_ALL_MENUS, { cursor });
+    const connection = payload.data?.menus;
+    const nodes = connection?.nodes || [];
+    menus.push(...nodes);
+    log(`[list] Page ${page}: +${nodes.length} (total ${menus.length})`);
+    cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return menus;
+}
+
 async function resolveTargetResourceId(targetClient, type, url, cache) {
   if (!RESOURCE_QUERIES[type]) return null;
   const handle = parseHandleFromUrl(url, type);
@@ -199,7 +246,69 @@ async function buildCreateItems(sourceItems, targetClient, cache, warnings) {
   return buildMenuItems(sourceItems, targetClient, cache, warnings, false);
 }
 
+async function syncOneMenu(sourceClient, targetClient, sourceMenu) {
+  const handle = sourceMenu.handle;
+  const cache = new Map();
+  const warnings = [];
+  const items = await buildCreateItems(sourceMenu.items, targetClient, cache, warnings);
+  const existingTarget = await findMenuByHandle(targetClient, handle);
+
+  if (dryRun) {
+    log(`[dry-run] Would ${existingTarget ? 'update' : 'create'} menu "${sourceMenu.title}" (${handle}) with ${items.length} top-level items`);
+    if (warnings.length) {
+      log(`[dry-run] Warnings (${warnings.length}):`);
+      warnings.forEach((w) => log(`  - ${w}`));
+    }
+    return { handle, action: existingTarget ? 'update' : 'create', ok: true };
+  }
+
+  if (existingTarget) {
+    log(`Updating existing target menu: ${handle}`);
+    const payload = await targetClient.query(
+      MENU_UPDATE,
+      {
+        id: existingTarget.id,
+        title: sourceMenu.title,
+        items,
+      },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.menuUpdate;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    log(`Updated menu: ${result.menu.handle}`);
+  } else {
+    log(`Creating target menu: ${handle}`);
+    const payload = await targetClient.query(
+      MENU_CREATE,
+      {
+        title: sourceMenu.title,
+        handle,
+        items,
+      },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.menuCreate;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    log(`Created menu: ${result.menu.handle}`);
+  }
+
+  if (warnings.length) {
+    log(`Warnings (${warnings.length}):`);
+    warnings.forEach((w) => log(`  - ${w}`));
+  }
+
+  return { handle, action: existingTarget ? 'update' : 'create', ok: true };
+}
+
 async function main() {
+  if (!syncAll && !MENU_HANDLE) {
+    throw new Error('Menu handle is required (or pass --all)');
+  }
+
   const config = loadConfig();
   const [sourceToken, targetToken] = await Promise.all([
     resolveStoreAccessToken(config.source),
@@ -219,67 +328,56 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log(`Fetching source menu: ${MENU_HANDLE} (${config.source.shop})`);
-  const sourceMenu = await fetchMenuByHandle(sourceClient, MENU_HANDLE);
-  if (!sourceMenu) {
-    throw new Error(`Source menu not found: ${MENU_HANDLE}`);
-  }
+  log(syncAll ? 'Menu sync: ALL menus' : `Menu sync: ${MENU_HANDLE}`);
+  log(`Source: ${config.source.shop}`);
+  log(`Target: ${config.target.shop}`);
+  log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
-  const cache = new Map();
-  const warnings = [];
-  const items = await buildCreateItems(sourceMenu.items, targetClient, cache, warnings);
-
-  const existingTarget = await findMenuByHandle(targetClient, MENU_HANDLE);
-
-  if (dryRun) {
-    log(`[dry-run] Would ${existingTarget ? 'update' : 'create'} menu "${sourceMenu.title}" with ${items.length} top-level items`);
-    if (warnings.length) {
-      log(`[dry-run] Warnings (${warnings.length}):`);
-      warnings.forEach((w) => log(`  - ${w}`));
+  let sourceMenus;
+  if (syncAll) {
+    log('Listing all source menus…');
+    const summaries = await listAllSourceMenus(sourceClient);
+    if (!summaries.length) {
+      log('No menus found on source. Nothing to sync.');
+      return;
     }
-    return;
-  }
-
-  if (existingTarget) {
-    log(`Updating existing target menu: ${MENU_HANDLE}`);
-    const payload = await targetClient.query(
-      MENU_UPDATE,
-      {
-        id: existingTarget.id,
-        title: sourceMenu.title,
-        items,
-      },
-      { isMutation: true, allowErrors: true },
-    );
-    const result = payload.data?.menuUpdate;
-    if (result?.userErrors?.length) {
-      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    sourceMenus = [];
+    for (const summary of summaries) {
+      const full = await fetchMenuById(sourceClient, summary.id);
+      if (full) sourceMenus.push(full);
     }
-    log(`Updated menu: ${result.menu.handle}`);
+    log(`Found ${sourceMenus.length} menu(s) to sync.`);
   } else {
-    log(`Creating target menu: ${MENU_HANDLE}`);
-    const payload = await targetClient.query(
-      MENU_CREATE,
-      {
-        title: sourceMenu.title,
-        handle: MENU_HANDLE,
-        items,
-      },
-      { isMutation: true, allowErrors: true },
-    );
-    const result = payload.data?.menuCreate;
-    if (result?.userErrors?.length) {
-      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    log(`Fetching source menu: ${MENU_HANDLE} (${config.source.shop})`);
+    const sourceMenu = await fetchMenuByHandle(sourceClient, MENU_HANDLE);
+    if (!sourceMenu) {
+      throw new Error(`Source menu not found: ${MENU_HANDLE}`);
     }
-    log(`Created menu: ${result.menu.handle}`);
+    sourceMenus = [sourceMenu];
   }
 
-  if (warnings.length) {
-    log(`\nWarnings (${warnings.length}):`);
-    warnings.forEach((w) => log(`  - ${w}`));
+  const results = [];
+  for (let i = 0; i < sourceMenus.length; i += 1) {
+    const menu = sourceMenus[i];
+    log(`\n[${i + 1}/${sourceMenus.length}]`);
+    try {
+      const result = await syncOneMenu(sourceClient, targetClient, menu);
+      results.push(result);
+    } catch (error) {
+      const message = error?.message || String(error);
+      log(`FAILED ${menu.handle}: ${message}`);
+      results.push({ handle: menu.handle, ok: false, error: message });
+    }
   }
 
-  log(`\nDone. Admin: https://${config.target.shop}/admin/menus`);
+  const okCount = results.filter((r) => r.ok).length;
+  const failCount = results.length - okCount;
+  log(`\nDone. ${okCount} succeeded, ${failCount} failed (of ${results.length}).`);
+  log(`Admin: https://${config.target.shop}/admin/menus`);
+
+  if (failCount > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

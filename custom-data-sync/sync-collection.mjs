@@ -7,6 +7,7 @@
  * Usage:
  *   node sync-collection.mjs [collection-handle] [--dry-run]
  *   node sync-collection.mjs robot-vacuums --dry-run
+ *   node sync-collection.mjs --all [--dry-run]
  *
  * Default handle: robot-vacuums
  *
@@ -18,48 +19,68 @@ import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedNamespace } from './lib/shopify-client.mjs';
 
-const args = process.argv.slice(2).filter((arg) => arg !== '--dry-run');
-const dryRun = process.argv.includes('--dry-run');
+const rawArgs = process.argv.slice(2);
+const dryRun = rawArgs.includes('--dry-run');
+const syncAll = rawArgs.includes('--all');
+const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
 const COLLECTION_HANDLE = (args[0] || 'robot-vacuums').trim().replace(/^\/+|\/+$/g, '');
+
+const COLLECTION_FIELDS = `
+  id
+  handle
+  title
+  descriptionHtml
+  sortOrder
+  templateSuffix
+  seo {
+    title
+    description
+  }
+  image {
+    altText
+    url
+  }
+  ruleSet {
+    appliedDisjunctively
+    rules {
+      column
+      relation
+      condition
+    }
+  }
+  products(first: 100) {
+    nodes {
+      id
+      handle
+    }
+  }
+  metafields(first: 50) {
+    nodes {
+      namespace
+      key
+      type
+      value
+    }
+  }
+`;
 
 const FIND_COLLECTION = `
   query FindCollection($handle: String!) {
     collectionByHandle(handle: $handle) {
-      id
-      handle
-      title
-      descriptionHtml
-      sortOrder
-      templateSuffix
-      seo {
-        title
-        description
+      ${COLLECTION_FIELDS}
+    }
+  }
+`;
+
+const LIST_COLLECTIONS = `
+  query ListCollections($cursor: String) {
+    collections(first: 50, after: $cursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
       }
-      image {
-        altText
-        url
-      }
-      ruleSet {
-        appliedDisjunctively
-        rules {
-          column
-          relation
-          condition
-        }
-      }
-      products(first: 100) {
-        nodes {
-          id
-          handle
-        }
-      }
-      metafields(first: 50) {
-        nodes {
-          namespace
-          key
-          type
-          value
-        }
+      nodes {
+        ${COLLECTION_FIELDS}
       }
     }
   }
@@ -140,6 +161,24 @@ function shouldSyncMetafield(mf) {
 async function findCollectionByHandle(client, handle) {
   const payload = await client.query(FIND_COLLECTION, { handle });
   return payload.data?.collectionByHandle || null;
+}
+
+async function listAllSourceCollections(sourceClient) {
+  const collections = [];
+  let cursor = null;
+  let page = 0;
+
+  do {
+    page += 1;
+    const payload = await sourceClient.query(LIST_COLLECTIONS, { cursor });
+    const connection = payload.data?.collections;
+    const nodes = connection?.nodes || [];
+    collections.push(...nodes);
+    log(`[list] Page ${page}: +${nodes.length} (total ${collections.length})`);
+    cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return collections;
 }
 
 function buildCollectionInput(source, { id = null } = {}) {
@@ -305,9 +344,79 @@ async function publishToOnlineStore(targetClient, collectionId) {
   }
 }
 
+async function syncOneCollection(sourceClient, targetClient, source) {
+  const handle = source.handle;
+  const rules = source.ruleSet?.rules || [];
+  const products = source.products?.nodes || [];
+  const isSmart = rules.length > 0;
+
+  log(
+    `Source collection: "${source.title}" (${handle}) type=${isSmart ? 'smart' : 'manual'} products=${products.length} rules=${rules.length} descChars=${(source.descriptionHtml || '').length}`,
+  );
+
+  const existing = await findCollectionByHandle(targetClient, handle);
+
+  if (dryRun) {
+    log(`[dry-run] Would ${existing ? 'update' : 'create'} collection on target`);
+    log(`[dry-run] title=${source.title}`);
+    log(`[dry-run] handle=${handle}`);
+    log(`[dry-run] sortOrder=${source.sortOrder || '(default)'}`);
+    log(`[dry-run] templateSuffix=${source.templateSuffix || '(default)'}`);
+    log(`[dry-run] image=${source.image?.url ? 'yes' : 'no'}`);
+    if (isSmart) {
+      log(`[dry-run] smart rules=${rules.length} appliedDisjunctively=${source.ruleSet.appliedDisjunctively}`);
+    } else {
+      await syncManualProducts(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', products);
+    }
+    await syncMetafields(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', source.metafields?.nodes || []);
+    await publishToOnlineStore(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN');
+    return { handle, action: existing ? 'update' : 'create', ok: true };
+  }
+
+  let targetId;
+
+  if (existing) {
+    log(`Updating existing target collection: ${handle}`);
+    const payload = await targetClient.query(
+      COLLECTION_UPDATE,
+      { input: buildCollectionInput(source, { id: existing.id }) },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.collectionUpdate;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    targetId = result.collection.id;
+    log(`Updated collection: ${result.collection.handle} (${result.collection.id})`);
+  } else {
+    log(`Creating target collection: ${handle}`);
+    const payload = await targetClient.query(
+      COLLECTION_CREATE,
+      { input: buildCollectionInput(source) },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.collectionCreate;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    targetId = result.collection.id;
+    log(`Created collection: ${result.collection.handle} (${result.collection.id})`);
+  }
+
+  if (!isSmart) {
+    await syncManualProducts(targetClient, targetId, products);
+  }
+
+  await syncMetafields(targetClient, targetId, source.metafields?.nodes || []);
+  await publishToOnlineStore(targetClient, targetId);
+
+  log(`Storefront: https://${targetClient.shop}/collections/${handle}`);
+  return { handle, action: existing ? 'update' : 'create', ok: true };
+}
+
 async function main() {
-  if (!COLLECTION_HANDLE) {
-    throw new Error('Collection handle is required');
+  if (!syncAll && !COLLECTION_HANDLE) {
+    throw new Error('Collection handle is required (or pass --all)');
   }
 
   const config = loadConfig();
@@ -329,83 +438,50 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log(`Collection sync: ${COLLECTION_HANDLE}`);
+  log(syncAll ? 'Collection sync: ALL collections' : `Collection sync: ${COLLECTION_HANDLE}`);
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
-  const source = await findCollectionByHandle(sourceClient, COLLECTION_HANDLE);
-  if (!source) {
-    throw new Error(`Source collection not found for handle: ${COLLECTION_HANDLE}`);
-  }
-
-  const rules = source.ruleSet?.rules || [];
-  const products = source.products?.nodes || [];
-  const isSmart = rules.length > 0;
-
-  log(
-    `Source collection: "${source.title}" (${source.handle}) type=${isSmart ? 'smart' : 'manual'} products=${products.length} rules=${rules.length} descChars=${(source.descriptionHtml || '').length}`,
-  );
-
-  const existing = await findCollectionByHandle(targetClient, COLLECTION_HANDLE);
-
-  if (dryRun) {
-    log(`[dry-run] Would ${existing ? 'update' : 'create'} collection on target`);
-    log(`[dry-run] title=${source.title}`);
-    log(`[dry-run] handle=${source.handle}`);
-    log(`[dry-run] sortOrder=${source.sortOrder || '(default)'}`);
-    log(`[dry-run] templateSuffix=${source.templateSuffix || '(default)'}`);
-    log(`[dry-run] image=${source.image?.url ? 'yes' : 'no'}`);
-    if (isSmart) {
-      log(`[dry-run] smart rules=${rules.length} appliedDisjunctively=${source.ruleSet.appliedDisjunctively}`);
-    } else {
-      await syncManualProducts(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', products);
+  let sourceCollections;
+  if (syncAll) {
+    log('Listing all source collections…');
+    sourceCollections = await listAllSourceCollections(sourceClient);
+    if (!sourceCollections.length) {
+      log('No collections found on source. Nothing to sync.');
+      return;
     }
-    await syncMetafields(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', source.metafields?.nodes || []);
-    await publishToOnlineStore(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN');
-    log('\nDry run complete.');
-    return;
-  }
-
-  let targetId;
-
-  if (existing) {
-    log(`Updating existing target collection: ${COLLECTION_HANDLE}`);
-    const payload = await targetClient.query(
-      COLLECTION_UPDATE,
-      { input: buildCollectionInput(source, { id: existing.id }) },
-      { isMutation: true, allowErrors: true },
-    );
-    const result = payload.data?.collectionUpdate;
-    if (result?.userErrors?.length) {
-      throw new Error(result.userErrors.map((e) => e.message).join('; '));
-    }
-    targetId = result.collection.id;
-    log(`Updated collection: ${result.collection.handle} (${result.collection.id})`);
+    log(`Found ${sourceCollections.length} collection(s) to sync.`);
   } else {
-    log(`Creating target collection: ${COLLECTION_HANDLE}`);
-    const payload = await targetClient.query(
-      COLLECTION_CREATE,
-      { input: buildCollectionInput(source) },
-      { isMutation: true, allowErrors: true },
-    );
-    const result = payload.data?.collectionCreate;
-    if (result?.userErrors?.length) {
-      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    const source = await findCollectionByHandle(sourceClient, COLLECTION_HANDLE);
+    if (!source) {
+      throw new Error(`Source collection not found for handle: ${COLLECTION_HANDLE}`);
     }
-    targetId = result.collection.id;
-    log(`Created collection: ${result.collection.handle} (${result.collection.id})`);
+    sourceCollections = [source];
   }
 
-  if (!isSmart) {
-    await syncManualProducts(targetClient, targetId, products);
+  const results = [];
+  for (let i = 0; i < sourceCollections.length; i += 1) {
+    const collection = sourceCollections[i];
+    log(`\n[${i + 1}/${sourceCollections.length}]`);
+    try {
+      const result = await syncOneCollection(sourceClient, targetClient, collection);
+      results.push(result);
+    } catch (error) {
+      const message = error?.message || String(error);
+      log(`FAILED ${collection.handle}: ${message}`);
+      results.push({ handle: collection.handle, ok: false, error: message });
+    }
   }
 
-  await syncMetafields(targetClient, targetId, source.metafields?.nodes || []);
-  await publishToOnlineStore(targetClient, targetId);
+  const okCount = results.filter((r) => r.ok).length;
+  const failCount = results.length - okCount;
+  log(`\nDone. ${okCount} succeeded, ${failCount} failed (of ${results.length}).`);
+  log(`Admin: https://${config.target.shop}/admin/collections`);
 
-  log(`\nDone. Admin: https://${config.target.shop}/admin/collections`);
-  log(`Storefront: https://${config.target.shop}/collections/${COLLECTION_HANDLE}`);
+  if (failCount > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

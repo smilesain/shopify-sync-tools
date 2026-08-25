@@ -58,14 +58,15 @@ TARGET_ACCESS_TOKEN=shpat_xxx
 ## 功能
 
 - 勾选同步模块：Metaobject / Metafield / Menu / Page / Blog Article / Collection / Product / Template 图片 / Template 视频
-- Page 默认同步 handle=`about-us`（可改）
+- Page 默认同步 handle=`about-us`（可改），或勾选一次性同步源站全部页面
 - Blog Article 默认同步 handle=`test`（可改）；勾选「一次性同步全部」则拉取源站所有文章逐条同步；若目标站缺少同 handle 的 Blog，会先创建 Blog
-- Collection 默认同步 handle=`robot-vacuums`（可改）；智能集合同步规则，手动集合按 product handle 映射成员
-- Product 支持一次填多个数字 ID（换行 / 逗号 / 空格分隔），按顺序逐个调用 `sync-product.mjs`
+- Collection 默认同步 handle=`robot-vacuums`（可改）；智能集合同步规则，手动集合按 product handle 映射成员；也可一次性同步全部
+- Product 支持一次填多个数字 ID，或勾选一次性同步源站全部产品
+- Menu 填写 handle，或勾选一次性同步源站全部菜单
 - 选择 Templates：可填写本机 `templates` 目录路径并扫描；也可粘贴额外 JSON 绝对路径（工具不必放在主题包内）
 - Dry run / Live
 - 实时日志（SSE）
-- 浏览 `custom-data-sync/reports`
+- 任务结束后静默写入 `custom-data-sync/reports/job-*.json`（界面不展示，出问题时可打开文件查看步骤和日志尾部）
 
 
 
@@ -75,9 +76,11 @@ TARGET_ACCESS_TOKEN=shpat_xxx
 cd custom-data-sync
 node sync-page.mjs about-us --dry-run
 node sync-page.mjs about-us
+node sync-page.mjs --all --dry-run
+node sync-page.mjs --all
 ```
 
-需要源站 `read_content`、目标站 `write_content`（建议目标站也开 `read_content` 以便按 handle 更新）。
+需要源站 `read_content`、目标站 `write_content`（建议目标站也开 `read_content` 以便按 handle 更新）。`--all` 会分页拉取源站全部页面并按序同步，单条失败会继续，最后汇总。
 
 ## CLI：单独同步 Blog 文章
 
@@ -97,9 +100,11 @@ node sync-article.mjs --all
 cd custom-data-sync
 node sync-collection.mjs robot-vacuums --dry-run
 node sync-collection.mjs robot-vacuums
+node sync-collection.mjs --all --dry-run
+node sync-collection.mjs --all
 ```
 
-需要源站 `read_products`，目标站 `write_products`（建议也开 `read_products`）。手动集合只会加入目标站已存在的同 handle 产品。若要自动发布到 Online Store，目标站还需 `read_publications` + `write_publications`；缺少时会跳过发布并继续完成创建/更新。
+需要源站 `read_products`，目标站 `write_products`（建议也开 `read_products`）。手动集合只会加入目标站已存在的同 handle 产品。若要自动发布到 Online Store，目标站还需 `read_publications` + `write_publications`；缺少时会跳过发布并继续完成创建/更新。`--all` 会分页拉取源站全部集合并按序同步，单条失败会继续，最后汇总。
 
 ## CLI：Template 图片 / 视频
 
@@ -128,4 +133,4 @@ node sync-template-files.mjs "E:\MyTheme\templates\product.foo.json" --dry-run
 
 ## 说明
 
-Page / Blog Article / Collection 已支持（按 handle）。Product 支持批量数字 ID。
+Page / Blog Article / Collection / Menu / Product 均可单个同步，或使用 `--all` 一次同步源站全部。

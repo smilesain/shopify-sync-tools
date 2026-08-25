@@ -1,10 +1,21 @@
+#!/usr/bin/env node
+/**
+ * Sync Product(s) from source → target.
+ *
+ * Usage:
+ *   node sync-product.mjs [product-id] [--dry-run]
+ *   node sync-product.mjs --all [--dry-run]
+ */
+
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedNamespace } from './lib/shopify-client.mjs';
 
-const PRODUCT_ID = process.argv[2] || '7549570941137';
-const dryRun = process.argv.includes('--dry-run');
-const productGid = `gid://shopify/Product/${PRODUCT_ID}`;
+const rawArgs = process.argv.slice(2);
+const dryRun = rawArgs.includes('--dry-run');
+const syncAll = rawArgs.includes('--all');
+const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
+const PRODUCT_ID = (args[0] || '7549570941137').trim().replace(/^gid:\/\/shopify\/Product\//i, '');
 
 const FETCH_PRODUCT = `
   query FetchProduct($id: ID!) {
@@ -51,6 +62,22 @@ const FETCH_PRODUCT = `
             ... on Metaobject { handle type }
           }
         }
+      }
+    }
+  }
+`;
+
+const LIST_PRODUCTS = `
+  query ListProducts($cursor: String) {
+    products(first: 50, after: $cursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        handle
+        title
       }
     }
   }
@@ -279,28 +306,26 @@ function buildMetafieldInputs(productId, metafields, metaobjectIdMap) {
     .filter(Boolean);
 }
 
-async function main() {
-  const config = loadConfig();
-  log('auth', 'Authenticating stores...');
-  const [sourceToken, targetToken] = await Promise.all([
-    resolveStoreAccessToken(config.source),
-    resolveStoreAccessToken(config.target),
-  ]);
+async function listAllSourceProducts(sourceClient) {
+  const products = [];
+  let cursor = null;
+  let page = 0;
 
-  const sourceClient = new ShopifyClient({
-    shop: config.source.shop,
-    accessToken: sourceToken,
-    apiVersion: config.apiVersion,
-    mutationDelayMs: config.mutationDelayMs,
-  });
-  const targetClient = new ShopifyClient({
-    shop: config.target.shop,
-    accessToken: targetToken,
-    apiVersion: config.apiVersion,
-    mutationDelayMs: config.mutationDelayMs,
-  });
+  do {
+    page += 1;
+    const payload = await sourceClient.query(LIST_PRODUCTS, { cursor });
+    const connection = payload.data?.products;
+    const nodes = connection?.nodes || [];
+    products.push(...nodes);
+    log('list', `Page ${page}: +${nodes.length} (total ${products.length})`);
+    cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  } while (cursor);
 
-  log('product', `Fetching source product ${productGid} from ${config.source.shop}`);
+  return products;
+}
+
+async function syncOneProduct(sourceClient, targetClient, productGid) {
+  log('product', `Fetching source product ${productGid} from ${sourceClient.shop}`);
   const sourcePayload = await sourceClient.query(FETCH_PRODUCT, { id: productGid });
   const product = sourcePayload.data.product;
   if (!product) throw new Error(`Product not found: ${productGid}`);
@@ -325,7 +350,7 @@ async function main() {
     log('product', `[dry-run] Would ${existingProduct ? 'update' : 'create'} product ${product.handle}`);
     log('product', `[dry-run] Images: ${product.media.nodes.length}`);
     log('product', `[dry-run] Metafields: ${buildMetafieldInputs('dry-run', product.metafields.nodes, metaobjectIdMap).length}`);
-    return;
+    return { handle: product.handle, action: existingProduct ? 'update' : 'create', ok: true };
   }
 
   log('product', `${existingProduct ? 'Updating' : 'Creating'} product on target...`);
@@ -387,9 +412,76 @@ async function main() {
 
   const finalPayload = await targetClient.query(FIND_PRODUCT_BY_HANDLE, { handle: product.handle });
   const finalProduct = finalPayload.data.productByHandle;
-  console.log('\nSync complete.');
-  console.log(`Target product: https://${config.target.shop}/admin/products/${finalProduct.id.split('/').pop()}`);
-  console.log(`Storefront: https://${config.target.shop}/products/${product.handle}`);
+  log('product', `Admin: https://${targetClient.shop}/admin/products/${finalProduct.id.split('/').pop()}`);
+  log('product', `Storefront: https://${targetClient.shop}/products/${product.handle}`);
+  return { handle: product.handle, action: existingProduct ? 'update' : 'create', ok: true };
+}
+
+async function main() {
+  if (!syncAll && !/^\d+$/.test(PRODUCT_ID)) {
+    throw new Error('Numeric product ID is required (or pass --all)');
+  }
+
+  const config = loadConfig();
+  log('auth', 'Authenticating stores...');
+  const [sourceToken, targetToken] = await Promise.all([
+    resolveStoreAccessToken(config.source),
+    resolveStoreAccessToken(config.target),
+  ]);
+
+  const sourceClient = new ShopifyClient({
+    shop: config.source.shop,
+    accessToken: sourceToken,
+    apiVersion: config.apiVersion,
+    mutationDelayMs: config.mutationDelayMs,
+  });
+  const targetClient = new ShopifyClient({
+    shop: config.target.shop,
+    accessToken: targetToken,
+    apiVersion: config.apiVersion,
+    mutationDelayMs: config.mutationDelayMs,
+  });
+
+  log('product', syncAll ? 'Product sync: ALL products' : `Product sync: ${PRODUCT_ID}`);
+  log('product', `Source: ${config.source.shop}`);
+  log('product', `Target: ${config.target.shop}`);
+  log('product', `Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
+
+  let sourceProducts;
+  if (syncAll) {
+    log('list', 'Listing all source products…');
+    sourceProducts = await listAllSourceProducts(sourceClient);
+    if (!sourceProducts.length) {
+      log('product', 'No products found on source. Nothing to sync.');
+      return;
+    }
+    log('list', `Found ${sourceProducts.length} product(s) to sync.`);
+  } else {
+    sourceProducts = [{ id: `gid://shopify/Product/${PRODUCT_ID}` }];
+  }
+
+  const results = [];
+  for (let i = 0; i < sourceProducts.length; i += 1) {
+    const item = sourceProducts[i];
+    log('product', `\n[${i + 1}/${sourceProducts.length}]`);
+    try {
+      const result = await syncOneProduct(sourceClient, targetClient, item.id);
+      results.push(result);
+    } catch (error) {
+      const message = error?.message || String(error);
+      const handle = item.handle || item.id;
+      log('product', `FAILED ${handle}: ${message}`);
+      results.push({ handle, ok: false, error: message });
+    }
+  }
+
+  const okCount = results.filter((r) => r.ok).length;
+  const failCount = results.length - okCount;
+  log('product', `\nDone. ${okCount} succeeded, ${failCount} failed (of ${results.length}).`);
+
+  if (failCount > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

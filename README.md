@@ -70,9 +70,9 @@ node sync-console/server.mjs
 | 模块                         | 说明                         |
 | -------------------------- | -------------------------- |
 | Metaobject / Metafield     | 同步定义（schema）               |
-| Menu / Page / Blog Article | 按 handle；文章支持一次性同步全部       |
-| Collection                 | 按 handle；智能规则 / 手动成员映射     |
-| Product                    | 支持多个数字 ID                  |
+| Menu / Page / Blog Article | 按 handle，或一次性同步全部           |
+| Collection                 | 按 handle，或一次性同步全部；智能规则 / 手动成员映射 |
+| Product                    | 多个数字 ID，或一次性同步全部            |
 | Template 图片 / 视频           | 填写本机主题 `templates` 目录后扫描同步 |
 
 
@@ -83,9 +83,11 @@ Template 媒体同步**不必**把本工具放进主题包内，在界面填写�
 ```bash
 cd custom-data-sync
 
-node sync-page.mjs about-us --dry-run
+node sync-page.mjs --all --dry-run
 node sync-article.mjs --all --dry-run
-node sync-collection.mjs robot-vacuums --dry-run
+node sync-collection.mjs --all --dry-run
+node sync-product.mjs --all --dry-run
+node sync-menu.mjs --all --dry-run
 node sync-template-files.mjs --dir="E:\MyTheme\templates" product.foo.json --dry-run
 ```
 

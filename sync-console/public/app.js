@@ -30,6 +30,22 @@ function selectedModules() {
   return [...document.querySelectorAll('input[name="module"]:checked')].map((el) => el.value);
 }
 
+function syncModuleFields() {
+  const selected = new Set(selectedModules());
+  document.querySelectorAll('.mod-fields[data-for]').forEach((el) => {
+    const keys = String(el.dataset.for || '')
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean);
+    el.hidden = !keys.some((key) => selected.has(key));
+  });
+}
+
+function openStoreManager() {
+  const el = $('#storeManager');
+  if (el) el.open = true;
+}
+
 function selectedTemplates() {
   return [...document.querySelectorAll('#templateList input[type="checkbox"]:checked')].map(
     (el) => el.value,
@@ -175,24 +191,6 @@ async function scanTemplates({ persist = true } = {}) {
   }
 }
 
-function renderReports(reports) {
-  const el = $('#reportList');
-  if (!reports.length) {
-    el.innerHTML = `<li><span>暂无报告</span></li>`;
-    return;
-  }
-  el.innerHTML = reports
-    .map(
-      (r) => `
-      <li>
-        <a href="/api/reports/${encodeURIComponent(r.name)}" target="_blank" rel="noopener">${r.name}</a>
-        <span>${new Date(r.mtime).toLocaleString()}</span>
-      </li>
-    `,
-    )
-    .join('');
-}
-
 function appendLog(line) {
   const view = $('#logView');
   if (view.textContent === '等待任务…') view.textContent = '';
@@ -229,18 +227,12 @@ function attachStream(jobId) {
     $('#startBtn').disabled = job.status === 'running' || job.status === 'queued';
   });
 
-  es.addEventListener('done', async (event) => {
+  es.addEventListener('done', (event) => {
     const job = JSON.parse(event.data);
     setBadge(job.status);
     $('#cancelBtn').disabled = true;
     $('#startBtn').disabled = false;
     closeStream();
-    try {
-      const { reports } = await fetchJson('/api/reports');
-      renderReports(reports);
-    } catch {
-      /* ignore */
-    }
   });
 
   es.onerror = () => {
@@ -264,6 +256,7 @@ function fillStoreForm(store) {
   $('#storeToken').value = '';
   $('#storeToken').placeholder = store.hasAccessToken ? '已保存（留空不改）' : '必填：Admin API access token';
   $('#saveStoreBtn').textContent = '更新店铺';
+  openStoreManager();
 }
 
 async function persistSelection() {
@@ -288,17 +281,17 @@ async function persistSelection() {
 }
 
 async function loadBootstrap() {
-  const [config, storesPayload, templatesPayload, reportsPayload] = await Promise.all([
+  const [config, storesPayload, templatesPayload] = await Promise.all([
     fetchJson('/api/config'),
     fetchJson('/api/stores'),
     fetchJson('/api/templates'),
-    fetchJson('/api/reports'),
   ]);
 
   applyStoresPayload(storesPayload, config);
   $('#templatesDir').value = config.templatesDir || config.defaultTemplatesDir || '';
   applyTemplatesPayload(templatesPayload, $('#templatesDir').value);
-  renderReports(reportsPayload.reports || []);
+  if (!state.stores.length) openStoreManager();
+  syncModuleFields();
 }
 
 async function startJob() {
@@ -308,8 +301,12 @@ async function startJob() {
     dryRun: $('#dryRun').checked,
     menuHandle: $('#menuHandle').value.trim(),
     pageHandle: $('#pageHandle').value.trim() || 'about-us',
+    pageSyncAll: $('#pageSyncAll').checked,
     articleHandle: $('#articleHandle').value.trim() || 'test',
     articleSyncAll: $('#articleSyncAll').checked,
+    collectionSyncAll: $('#collectionSyncAll').checked,
+    productSyncAll: $('#productSyncAll').checked,
+    menuSyncAll: $('#menuSyncAll').checked,
     collectionHandle: $('#collectionHandle').value.trim() || 'robot-vacuums',
     productIds: $('#productIds').value.trim(),
     templatesDir: $('#templatesDir').value.trim(),
@@ -457,13 +454,26 @@ $('#storeList').addEventListener('click', async (event) => {
 $('#startBtn').addEventListener('click', startJob);
 $('#cancelBtn').addEventListener('click', cancelJob);
 
-function syncArticleHandleState() {
-  const all = $('#articleSyncAll').checked;
-  $('#articleHandle').disabled = all;
+document.querySelectorAll('input[name="module"]').forEach((el) => {
+  el.addEventListener('change', syncModuleFields);
+});
+
+function bindSyncAllToggle(checkboxId, fieldId) {
+  const checkbox = $(`#${checkboxId}`);
+  const field = $(`#${fieldId}`);
+  if (!checkbox || !field) return;
+  const apply = () => {
+    field.disabled = checkbox.checked;
+  };
+  checkbox.addEventListener('change', apply);
+  apply();
 }
 
-$('#articleSyncAll').addEventListener('change', syncArticleHandleState);
-syncArticleHandleState();
+bindSyncAllToggle('articleSyncAll', 'articleHandle');
+bindSyncAllToggle('pageSyncAll', 'pageHandle');
+bindSyncAllToggle('productSyncAll', 'productIds');
+bindSyncAllToggle('collectionSyncAll', 'collectionHandle');
+bindSyncAllToggle('menuSyncAll', 'menuHandle');
 
 loadBootstrap().catch((error) => {
   setError(error.message);
