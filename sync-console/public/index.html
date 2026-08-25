@@ -72,7 +72,7 @@
             <div class="module-list" id="moduleList">
             <div class="mod-group">
               <label class="mod"><input type="checkbox" name="module" value="metaobjects" /> Metaobject 定义</label>
-              <div class="mod-fields" data-for="metaobjects" hidden>
+              <div class="mod-fields" data-for="metaobjects,metaobject-entries" hidden>
                 <div class="field-block tight">
                   <label for="metaobjectTypes">Metaobject type（可多个）</label>
                   <textarea
@@ -80,9 +80,13 @@
                     rows="3"
                     placeholder="compliance_profile&#10;compliance_manufacturer"
                   ></textarea>
-                  <p class="hint">填写 type（定义的唯一标识）。留空则同步全部；换行 / 逗号均可。</p>
+                  <p class="hint">填写 type（定义和数据共用）。留空则同步全部；换行 / 逗号均可。</p>
                 </div>
               </div>
+            </div>
+
+            <div class="mod-group">
+              <label class="mod"><input type="checkbox" name="module" value="metaobject-entries" /> Metaobject 数据</label>
             </div>
 
             <div class="mod-group">

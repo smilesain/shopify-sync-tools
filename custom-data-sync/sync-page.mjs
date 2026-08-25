@@ -26,12 +26,24 @@ const PAGE_FIELDS = `
   body
   isPublished
   templateSuffix
-  metafields(first: 50) {
+  metafields(first: 250) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       namespace
       key
       type
       value
+    }
+  }
+`;
+
+const PAGE_METAFIELDS_PAGE = `
+  query PageMetafieldsPage($id: ID!, $cursor: String) {
+    page(id: $id) {
+      metafields(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { namespace key type value }
+      }
     }
   }
 `;
@@ -107,6 +119,22 @@ async function findPageByHandle(client, handle) {
   return nodes.find((page) => page.handle === handle) || null;
 }
 
+async function hydratePageMetafields(client, page) {
+  const nodes = [...(page.metafields?.nodes || [])];
+  let cursor = page.metafields?.pageInfo?.hasNextPage
+    ? page.metafields.pageInfo.endCursor
+    : null;
+  while (cursor) {
+    const payload = await client.query(PAGE_METAFIELDS_PAGE, { id: page.id, cursor });
+    const connection = payload.data?.page?.metafields;
+    if (!connection) break;
+    nodes.push(...(connection.nodes || []));
+    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  }
+  page.metafields.nodes = nodes;
+  return page;
+}
+
 async function listAllSourcePages(sourceClient) {
   const pages = [];
   let cursor = null;
@@ -122,6 +150,9 @@ async function listAllSourcePages(sourceClient) {
     cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
   } while (cursor);
 
+  for (const item of pages) {
+    await hydratePageMetafields(sourceClient, item);
+  }
   return pages;
 }
 
@@ -157,16 +188,20 @@ async function syncPageMetafields(targetClient, ownerId, metafields) {
     return;
   }
 
-  const payload = await targetClient.query(
-    SET_METAFIELDS,
-    { metafields: inputs },
-    { isMutation: true, allowErrors: true },
-  );
-  const result = payload.data?.metafieldsSet;
-  if (result?.userErrors?.length) {
-    throw new Error(result.userErrors.map((e) => e.message).join('; '));
+  let setCount = 0;
+  for (let index = 0; index < inputs.length; index += 25) {
+    const payload = await targetClient.query(
+      SET_METAFIELDS,
+      { metafields: inputs.slice(index, index + 25) },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.metafieldsSet;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    setCount += result?.metafields?.length || 0;
   }
-  log(`[metafields] Set ${result?.metafields?.length || 0} metafield(s)`);
+  log(`[metafields] Set ${setCount} metafield(s)`);
 }
 
 async function syncOnePage(sourceClient, targetClient, sourcePage) {
@@ -263,10 +298,11 @@ async function main() {
     }
     log(`Found ${sourcePages.length} page(s) to sync.`);
   } else {
-    const sourcePage = await findPageByHandle(sourceClient, PAGE_HANDLE);
+    let sourcePage = await findPageByHandle(sourceClient, PAGE_HANDLE);
     if (!sourcePage) {
       throw new Error(`Source page not found for handle: ${PAGE_HANDLE}`);
     }
+    sourcePage = await hydratePageMetafields(sourceClient, sourcePage);
     sourcePages = [sourcePage];
   }
 

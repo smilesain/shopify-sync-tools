@@ -48,18 +48,42 @@ const COLLECTION_FIELDS = `
       condition
     }
   }
-  products(first: 100) {
+  products(first: 250) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       handle
     }
   }
-  metafields(first: 50) {
+  metafields(first: 250) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       namespace
       key
       type
       value
+    }
+  }
+`;
+
+const COLLECTION_PRODUCTS_PAGE = `
+  query CollectionProductsPage($id: ID!, $cursor: String) {
+    collection(id: $id) {
+      products(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id handle }
+      }
+    }
+  }
+`;
+
+const COLLECTION_METAFIELDS_PAGE = `
+  query CollectionMetafieldsPage($id: ID!, $cursor: String) {
+    collection(id: $id) {
+      metafields(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { namespace key type value }
+      }
     }
   }
 `;
@@ -113,9 +137,12 @@ const COLLECTION_ADD_PRODUCTS = `
   }
 `;
 
-const FIND_PRODUCT = `
-  query ProductByHandle($handle: String!) {
-    productByHandle(handle: $handle) { id handle }
+const LIST_PRODUCT_INDEX = `
+  query ProductIndex($cursor: String) {
+    products(first: 250, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id handle }
+    }
   }
 `;
 
@@ -163,6 +190,53 @@ async function findCollectionByHandle(client, handle) {
   return payload.data?.collectionByHandle || null;
 }
 
+async function loadCompleteConnection(client, collectionId, initial, document, pickConnection) {
+  const nodes = [...(initial?.nodes || [])];
+  let cursor = initial?.pageInfo?.hasNextPage ? initial.pageInfo.endCursor : null;
+
+  while (cursor) {
+    const payload = await client.query(document, { id: collectionId, cursor });
+    const connection = pickConnection(payload.data?.collection);
+    if (!connection) break;
+    nodes.push(...(connection.nodes || []));
+    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  }
+
+  return nodes;
+}
+
+async function hydrateCollectionConnections(client, collection) {
+  const [products, metafields] = await Promise.all([
+    loadCompleteConnection(
+      client,
+      collection.id,
+      collection.products,
+      COLLECTION_PRODUCTS_PAGE,
+      (item) => item?.products,
+    ),
+    loadCompleteConnection(
+      client,
+      collection.id,
+      collection.metafields,
+      COLLECTION_METAFIELDS_PAGE,
+      (item) => item?.metafields,
+    ),
+  ]);
+  collection.products.nodes = products;
+  collection.metafields.nodes = metafields;
+  return collection;
+}
+
+async function buildTargetProductIndex(targetClient) {
+  const products = await targetClient.paginate(
+    'products',
+    LIST_PRODUCT_INDEX,
+    {},
+    (data) => data.products,
+  );
+  return new Map(products.map((product) => [product.handle, product.id]));
+}
+
 async function listAllSourceCollections(sourceClient) {
   const collections = [];
   let cursor = null;
@@ -178,6 +252,9 @@ async function listAllSourceCollections(sourceClient) {
     cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
   } while (cursor);
 
+  for (const collection of collections) {
+    await hydrateCollectionConnections(sourceClient, collection);
+  }
   return collections;
 }
 
@@ -243,39 +320,43 @@ async function syncMetafields(targetClient, ownerId, metafields) {
     return;
   }
 
-  const payload = await targetClient.query(
-    SET_METAFIELDS,
-    { metafields: inputs },
-    { isMutation: true, allowErrors: true },
-  );
-  const result = payload.data?.metafieldsSet;
-  if (result?.userErrors?.length) {
-    throw new Error(result.userErrors.map((e) => e.message).join('; '));
+  let setCount = 0;
+  for (let index = 0; index < inputs.length; index += 25) {
+    const chunk = inputs.slice(index, index + 25);
+    const payload = await targetClient.query(
+      SET_METAFIELDS,
+      { metafields: chunk },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.metafieldsSet;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    setCount += result?.metafields?.length || 0;
   }
-  log(`[metafields] Set ${result?.metafields?.length || 0} metafield(s)`);
+  log(`[metafields] Set ${setCount} metafield(s)`);
 }
 
-async function resolveTargetProductIds(targetClient, sourceProducts) {
+function resolveTargetProductIds(productIndex, sourceProducts) {
   const mapped = [];
   const missing = [];
 
   for (const product of sourceProducts || []) {
-    const payload = await targetClient.query(FIND_PRODUCT, { handle: product.handle });
-    const target = payload.data?.productByHandle;
-    if (target?.id) mapped.push({ handle: product.handle, id: target.id });
+    const targetId = productIndex.get(product.handle);
+    if (targetId) mapped.push({ handle: product.handle, id: targetId });
     else missing.push(product.handle);
   }
 
   return { mapped, missing };
 }
 
-async function syncManualProducts(targetClient, collectionId, sourceProducts) {
+async function syncManualProducts(targetClient, collectionId, sourceProducts, productIndex) {
   if (!sourceProducts?.length) {
     log('[products] No source products to map');
     return;
   }
 
-  const { mapped, missing } = await resolveTargetProductIds(targetClient, sourceProducts);
+  const { mapped, missing } = resolveTargetProductIds(productIndex, sourceProducts);
   log(`[products] Mapped ${mapped.length}/${sourceProducts.length} by handle`);
   if (missing.length) {
     log(`[products] Missing on target (${missing.length}): ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? '…' : ''}`);
@@ -304,20 +385,32 @@ async function syncManualProducts(targetClient, collectionId, sourceProducts) {
   log(`[products] Added ${mapped.length} product(s)`);
 }
 
-async function publishToOnlineStore(targetClient, collectionId) {
+async function resolveOnlineStorePublication(targetClient) {
   try {
     const payload = await targetClient.query(PUBLICATIONS);
     const pubs = payload.data?.publications?.nodes || [];
-    const online =
+    return (
       pubs.find((p) => /online store/i.test(p.name || '')) ||
       pubs.find((p) => /online/i.test(p.name || '')) ||
-      pubs[0];
-
-    if (!online) {
-      log('[publish] No publication found; skip publish');
-      return;
+      pubs[0] ||
+      null
+    );
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (/access denied|read_publications|write_publications/i.test(msg)) {
+      log(`[publish] Disabled (missing publication scopes): ${msg}`);
+      return null;
     }
+    throw err;
+  }
+}
 
+async function publishToOnlineStore(targetClient, collectionId, online) {
+  if (!online) {
+    log('[publish] No publication available; skip publish');
+    return;
+  }
+  try {
     if (dryRun) {
       log(`[dry-run] Would publish collection to "${online.name}" (${online.id})`);
       return;
@@ -344,7 +437,13 @@ async function publishToOnlineStore(targetClient, collectionId) {
   }
 }
 
-async function syncOneCollection(sourceClient, targetClient, source) {
+async function syncOneCollection(
+  sourceClient,
+  targetClient,
+  source,
+  productIndex,
+  onlinePublication,
+) {
   const handle = source.handle;
   const rules = source.ruleSet?.rules || [];
   const products = source.products?.nodes || [];
@@ -366,10 +465,19 @@ async function syncOneCollection(sourceClient, targetClient, source) {
     if (isSmart) {
       log(`[dry-run] smart rules=${rules.length} appliedDisjunctively=${source.ruleSet.appliedDisjunctively}`);
     } else {
-      await syncManualProducts(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', products);
+      await syncManualProducts(
+        targetClient,
+        existing?.id || 'gid://shopify/Collection/DRY_RUN',
+        products,
+        productIndex,
+      );
     }
     await syncMetafields(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN', source.metafields?.nodes || []);
-    await publishToOnlineStore(targetClient, existing?.id || 'gid://shopify/Collection/DRY_RUN');
+    await publishToOnlineStore(
+      targetClient,
+      existing?.id || 'gid://shopify/Collection/DRY_RUN',
+      onlinePublication,
+    );
     return { handle, action: existing ? 'update' : 'create', ok: true };
   }
 
@@ -404,11 +512,11 @@ async function syncOneCollection(sourceClient, targetClient, source) {
   }
 
   if (!isSmart) {
-    await syncManualProducts(targetClient, targetId, products);
+    await syncManualProducts(targetClient, targetId, products, productIndex);
   }
 
   await syncMetafields(targetClient, targetId, source.metafields?.nodes || []);
-  await publishToOnlineStore(targetClient, targetId);
+  await publishToOnlineStore(targetClient, targetId, onlinePublication);
 
   log(`Storefront: https://${targetClient.shop}/collections/${handle}`);
   return { handle, action: existing ? 'update' : 'create', ok: true };
@@ -438,6 +546,13 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
+  log('Loading target product index…');
+  const [productIndex, onlinePublication] = await Promise.all([
+    buildTargetProductIndex(targetClient),
+    resolveOnlineStorePublication(targetClient),
+  ]);
+  log(`Target product index: ${productIndex.size}`);
+
   log(syncAll ? 'Collection sync: ALL collections' : `Collection sync: ${COLLECTION_HANDLE}`);
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
@@ -453,10 +568,11 @@ async function main() {
     }
     log(`Found ${sourceCollections.length} collection(s) to sync.`);
   } else {
-    const source = await findCollectionByHandle(sourceClient, COLLECTION_HANDLE);
+    let source = await findCollectionByHandle(sourceClient, COLLECTION_HANDLE);
     if (!source) {
       throw new Error(`Source collection not found for handle: ${COLLECTION_HANDLE}`);
     }
+    source = await hydrateCollectionConnections(sourceClient, source);
     sourceCollections = [source];
   }
 
@@ -465,7 +581,13 @@ async function main() {
     const collection = sourceCollections[i];
     log(`\n[${i + 1}/${sourceCollections.length}]`);
     try {
-      const result = await syncOneCollection(sourceClient, targetClient, collection);
+      const result = await syncOneCollection(
+        sourceClient,
+        targetClient,
+        collection,
+        productIndex,
+        onlinePublication,
+      );
       results.push(result);
     } catch (error) {
       const message = error?.message || String(error);

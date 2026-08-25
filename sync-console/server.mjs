@@ -286,7 +286,9 @@ function buildSteps(payload) {
   const { templatesDir, templates } = collectTemplateArgs(payload);
   /** @type {{ id: string, label: string, command: string, args: string[] }[]} */
   const steps = [];
-  const metaobjectTypes = modules.includes('metaobjects')
+  const metaobjectTypes = modules.some((module) =>
+    ['metaobjects', 'metaobject-entries'].includes(module),
+  )
     ? parseMetaobjectTypes(payload.metaobjectTypes)
     : [];
   const metafieldKeys = modules.includes('metafields')
@@ -328,6 +330,21 @@ function buildSteps(payload) {
     });
   }
 
+  if (modules.includes('metaobject-entries')) {
+    steps.push({
+      id: 'metaobject-entries',
+      label: metaobjectTypes.length
+        ? `Metaobject entries (${metaobjectTypes.length} types)`
+        : 'Metaobject entries (all merchant-owned types)',
+      command: process.execPath,
+      args: [
+        'sync-metaobject-entries.mjs',
+        ...(metaobjectTypes.length ? ['--types', metaobjectTypes.join(',')] : []),
+        ...dryArgs,
+      ],
+    });
+  }
+
   if (modules.includes('product')) {
     const syncAllProducts = Boolean(payload.productSyncAll);
     if (syncAllProducts) {
@@ -354,14 +371,12 @@ function buildSteps(payload) {
       if (invalid.length) {
         throw new Error(`Invalid product ID(s): ${invalid.join(', ')}`);
       }
-      for (const productId of uniqueIds) {
-        steps.push({
-          id: `product-${productId}`,
-          label: `Product: ${productId}`,
-          command: process.execPath,
-          args: ['sync-product.mjs', productId, ...dryArgs],
-        });
-      }
+      steps.push({
+        id: 'products-selected',
+        label: `Products: ${uniqueIds.length} selected`,
+        command: process.execPath,
+        args: ['sync-product.mjs', ...uniqueIds, ...dryArgs],
+      });
     }
   }
 
@@ -467,6 +482,12 @@ function buildSteps(payload) {
   }
 
   if (!steps.length) throw new Error('Select at least one sync module');
+  steps.unshift({
+    id: 'preflight',
+    label: 'Preflight: stores, authentication and scopes',
+    command: process.execPath,
+    args: ['preflight.mjs', `--modules=${modules.join(',')}`],
+  });
   return steps;
 }
 

@@ -318,6 +318,21 @@ async function startJob() {
     targetId: $('#targetSelect').value || null,
   };
 
+  if (!payload.dryRun) {
+    const target = findStore(payload.targetId);
+    if (!target) {
+      setError('请先选择目标店铺');
+      return;
+    }
+    const confirmed = prompt(
+      `即将以 LIVE 模式写入目标店铺：\n${target.name} · ${target.shop}\n\n请输入完整目标店铺域名以确认：`,
+    );
+    if (String(confirmed || '').trim().toLowerCase() !== target.shop.toLowerCase()) {
+      setError('目标店铺确认不匹配，已取消 Live 同步');
+      return;
+    }
+  }
+
   try {
     resetLog();
     appendLog('Creating job…');

@@ -15,7 +15,14 @@ const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
 const syncAll = rawArgs.includes('--all');
 const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
-const PRODUCT_ID = (args[0] || '7549570941137').trim().replace(/^gid:\/\/shopify\/Product\//i, '');
+const PRODUCT_IDS = [
+  ...new Set(
+    args
+      .flatMap((arg) => String(arg).split(/[\s,;]+/))
+      .map((id) => id.trim().replace(/^gid:\/\/shopify\/Product\//i, ''))
+      .filter(Boolean),
+  ),
+];
 
 const FETCH_PRODUCT = `
   query FetchProduct($id: ID!) {
@@ -32,7 +39,8 @@ const FETCH_PRODUCT = `
       category { id }
       seo { title description }
       options { name position values }
-      media(first: 20) {
+      media(first: 250) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           ... on MediaImage {
             alt
@@ -40,7 +48,8 @@ const FETCH_PRODUCT = `
           }
         }
       }
-      variants(first: 100) {
+      variants(first: 250) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           title
           sku
@@ -52,7 +61,63 @@ const FETCH_PRODUCT = `
           selectedOptions { name value }
         }
       }
-      metafields(first: 50) {
+      metafields(first: 250) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          namespace
+          key
+          type
+          value
+          reference {
+            ... on Metaobject { handle type }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FETCH_PRODUCT_MEDIA_PAGE = `
+  query ProductMediaPage($id: ID!, $cursor: String) {
+    product(id: $id) {
+      media(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          ... on MediaImage {
+            alt
+            image { url }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FETCH_PRODUCT_VARIANTS_PAGE = `
+  query ProductVariantsPage($id: ID!, $cursor: String) {
+    product(id: $id) {
+      variants(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          title
+          sku
+          barcode
+          price
+          compareAtPrice
+          taxable
+          inventoryPolicy
+          selectedOptions { name value }
+        }
+      }
+    }
+  }
+`;
+
+const FETCH_PRODUCT_METAFIELDS_PAGE = `
+  query ProductMetafieldsPage($id: ID!, $cursor: String) {
+    product(id: $id) {
+      metafields(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           namespace
           key
@@ -96,7 +161,18 @@ const FETCH_METAOBJECT = `
 
 const FIND_PRODUCT_BY_HANDLE = `
   query ProductByHandle($handle: String!) {
-    productByHandle(handle: $handle) { id handle }
+    productByHandle(handle: $handle) {
+      id
+      handle
+      media(first: 250) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          ... on MediaImage {
+            image { url }
+          }
+        }
+      }
+    }
   }
 `;
 
@@ -152,13 +228,85 @@ function log(step, message) {
   console.log(`[${step}] ${message}`);
 }
 
+async function loadCompleteConnection(client, productId, initial, document, pickConnection) {
+  const nodes = [...(initial?.nodes || [])];
+  let cursor = initial?.pageInfo?.hasNextPage ? initial.pageInfo.endCursor : null;
+
+  while (cursor) {
+    const payload = await client.query(document, { id: productId, cursor });
+    const connection = pickConnection(payload.data?.product);
+    if (!connection) break;
+    nodes.push(...(connection.nodes || []));
+    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  }
+
+  return nodes;
+}
+
+async function hydrateProductConnections(client, product) {
+  const [media, variants, metafields] = await Promise.all([
+    loadCompleteConnection(
+      client,
+      product.id,
+      product.media,
+      FETCH_PRODUCT_MEDIA_PAGE,
+      (item) => item?.media,
+    ),
+    loadCompleteConnection(
+      client,
+      product.id,
+      product.variants,
+      FETCH_PRODUCT_VARIANTS_PAGE,
+      (item) => item?.variants,
+    ),
+    loadCompleteConnection(
+      client,
+      product.id,
+      product.metafields,
+      FETCH_PRODUCT_METAFIELDS_PAGE,
+      (item) => item?.metafields,
+    ),
+  ]);
+
+  product.media.nodes = media;
+  product.variants.nodes = variants;
+  product.metafields.nodes = metafields;
+  return product;
+}
+
+function mediaKey(url) {
+  if (!url) return '';
+  try {
+    const pathname = new URL(url).pathname;
+    return decodeURIComponent(pathname.split('/').pop() || '').toLowerCase();
+  } catch {
+    return String(url).split('?')[0].split('/').pop().toLowerCase();
+  }
+}
+
 function shouldSyncMetafield(mf) {
-  if (isRestrictedNamespace(mf.namespace.trim())) return false;
-  if (mf.namespace.startsWith('judgeme')) return false;
-  if (mf.namespace.startsWith('mc-facebook')) return false;
-  if (mf.namespace.startsWith('reviews')) return false;
-  if (mf.namespace.trim() === 'custom ' && mf.key === 'after_description_content') return false;
-  return mf.namespace.trim() === 'custom';
+  if (!mf?.namespace || !mf?.key) return false;
+  const namespace = mf.namespace.trim();
+  if (isRestrictedNamespace(namespace)) return false;
+
+  const allowlist = String(process.env.METAFIELD_NAMESPACE_ALLOWLIST || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (allowlist.length) return allowlist.includes(namespace);
+
+  const blocklist = new Set([
+    'judgeme',
+    'mc-facebook',
+    'reviews',
+    ...String(process.env.METAFIELD_NAMESPACE_BLOCKLIST || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ]);
+  return ![...blocklist].some(
+    (blocked) => namespace === blocked || namespace.startsWith(`${blocked}.`),
+  );
 }
 
 const METAOBJECT_FIELD_ALIASES = {
@@ -324,11 +472,12 @@ async function listAllSourceProducts(sourceClient) {
   return products;
 }
 
-async function syncOneProduct(sourceClient, targetClient, productGid) {
+async function syncOneProduct(sourceClient, targetClient, productGid, metaobjectCache) {
   log('product', `Fetching source product ${productGid} from ${sourceClient.shop}`);
   const sourcePayload = await sourceClient.query(FETCH_PRODUCT, { id: productGid });
-  const product = sourcePayload.data.product;
+  let product = sourcePayload.data.product;
   if (!product) throw new Error(`Product not found: ${productGid}`);
+  product = await hydrateProductConnections(sourceClient, product);
 
   log('product', `Source: ${product.title} (${product.handle})`);
 
@@ -338,12 +487,26 @@ async function syncOneProduct(sourceClient, targetClient, productGid) {
 
   const metaobjectIdMap = new Map();
   for (const ref of metaobjectRefs) {
-    const targetId = await ensureMetaobject(sourceClient, targetClient, ref);
+    const cacheKey = `${ref.type}:${ref.handle}`;
+    let targetId = metaobjectCache.get(cacheKey);
+    if (targetId === undefined) {
+      targetId = await ensureMetaobject(sourceClient, targetClient, ref);
+      metaobjectCache.set(cacheKey, targetId || null);
+    }
     if (targetId) metaobjectIdMap.set(`${ref.type}:${ref.handle}`, targetId);
   }
 
   const existingPayload = await targetClient.query(FIND_PRODUCT_BY_HANDLE, { handle: product.handle });
   const existingProduct = existingPayload.data.productByHandle;
+  if (existingProduct?.media?.pageInfo?.hasNextPage) {
+    existingProduct.media.nodes = await loadCompleteConnection(
+      targetClient,
+      existingProduct.id,
+      existingProduct.media,
+      FETCH_PRODUCT_MEDIA_PAGE,
+      (item) => item?.media,
+    );
+  }
   const productSetInput = buildProductSetInput(product, existingProduct?.id);
 
   if (dryRun) {
@@ -370,8 +533,14 @@ async function syncOneProduct(sourceClient, targetClient, productGid) {
   const targetProductId = setResult.product.id;
   log('product', `${existingProduct ? 'Updated' : 'Created'}: ${setResult.product.title} (${setResult.product.handle})`);
 
+  const existingMediaKeys = new Set(
+    (existingProduct?.media?.nodes || [])
+      .map((node) => mediaKey(node.image?.url))
+      .filter(Boolean),
+  );
   const media = product.media.nodes
     .filter((node) => node.image?.url)
+    .filter((node) => !existingMediaKeys.has(mediaKey(node.image.url)))
     .map((node) => ({
       originalSource: node.image.url,
       alt: node.alt || product.title,
@@ -389,6 +558,8 @@ async function syncOneProduct(sourceClient, targetClient, productGid) {
     if (mediaErrors.length) {
       console.warn('[media] Warnings:', mediaErrors.map((e) => e.message).join('; '));
     }
+  } else if (product.media.nodes.length) {
+    log('media', 'All source images already exist on target; skipping upload.');
   }
 
   const metafields = buildMetafieldInputs(
@@ -399,27 +570,32 @@ async function syncOneProduct(sourceClient, targetClient, productGid) {
 
   if (metafields.length) {
     log('metafields', `Setting ${metafields.length} metafields...`);
-    const mfPayload = await targetClient.query(
-      SET_METAFIELDS,
-      { metafields },
-      { isMutation: true, allowErrors: true },
-    );
-    const mfErrors = mfPayload.data.metafieldsSet.userErrors || [];
-    if (mfErrors.length) {
-      console.warn('[metafields] Warnings:', mfErrors.map((e) => e.message).join('; '));
+    for (let index = 0; index < metafields.length; index += 25) {
+      const chunk = metafields.slice(index, index + 25);
+      const mfPayload = await targetClient.query(
+        SET_METAFIELDS,
+        { metafields: chunk },
+        { isMutation: true, allowErrors: true },
+      );
+      const mfErrors = mfPayload.data?.metafieldsSet?.userErrors || [];
+      if (mfErrors.length) {
+        console.warn('[metafields] Warnings:', mfErrors.map((e) => e.message).join('; '));
+      }
     }
   }
 
-  const finalPayload = await targetClient.query(FIND_PRODUCT_BY_HANDLE, { handle: product.handle });
-  const finalProduct = finalPayload.data.productByHandle;
-  log('product', `Admin: https://${targetClient.shop}/admin/products/${finalProduct.id.split('/').pop()}`);
+  log('product', `Admin: https://${targetClient.shop}/admin/products/${targetProductId.split('/').pop()}`);
   log('product', `Storefront: https://${targetClient.shop}/products/${product.handle}`);
   return { handle: product.handle, action: existingProduct ? 'update' : 'create', ok: true };
 }
 
 async function main() {
-  if (!syncAll && !/^\d+$/.test(PRODUCT_ID)) {
-    throw new Error('Numeric product ID is required (or pass --all)');
+  if (!syncAll && !PRODUCT_IDS.length) {
+    throw new Error('At least one numeric product ID is required (or pass --all)');
+  }
+  const invalidIds = PRODUCT_IDS.filter((id) => !/^\d+$/.test(id));
+  if (!syncAll && invalidIds.length) {
+    throw new Error(`Invalid product ID(s): ${invalidIds.join(', ')}`);
   }
 
   const config = loadConfig();
@@ -457,15 +633,16 @@ async function main() {
     }
     log('list', `Found ${sourceProducts.length} product(s) to sync.`);
   } else {
-    sourceProducts = [{ id: `gid://shopify/Product/${PRODUCT_ID}` }];
+    sourceProducts = PRODUCT_IDS.map((id) => ({ id: `gid://shopify/Product/${id}` }));
   }
 
   const results = [];
+  const metaobjectCache = new Map();
   for (let i = 0; i < sourceProducts.length; i += 1) {
     const item = sourceProducts[i];
     log('product', `\n[${i + 1}/${sourceProducts.length}]`);
     try {
-      const result = await syncOneProduct(sourceClient, targetClient, item.id);
+      const result = await syncOneProduct(sourceClient, targetClient, item.id, metaobjectCache);
       results.push(result);
     } catch (error) {
       const message = error?.message || String(error);

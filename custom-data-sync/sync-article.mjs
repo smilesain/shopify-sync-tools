@@ -44,12 +44,24 @@ const ARTICLE_FIELDS = `
     title
     templateSuffix
   }
-  metafields(first: 50) {
+  metafields(first: 250) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       namespace
       key
       type
       value
+    }
+  }
+`;
+
+const ARTICLE_METAFIELDS_PAGE = `
+  query ArticleMetafieldsPage($id: ID!, $cursor: String) {
+    article(id: $id) {
+      metafields(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { namespace key type value }
+      }
     }
   }
 `;
@@ -147,6 +159,25 @@ async function findArticleByHandle(client, handle) {
   return nodes.find((article) => article.handle === handle) || null;
 }
 
+async function hydrateArticleMetafields(client, article) {
+  const nodes = [...(article.metafields?.nodes || [])];
+  let cursor = article.metafields?.pageInfo?.hasNextPage
+    ? article.metafields.pageInfo.endCursor
+    : null;
+  while (cursor) {
+    const payload = await client.query(ARTICLE_METAFIELDS_PAGE, {
+      id: article.id,
+      cursor,
+    });
+    const connection = payload.data?.article?.metafields;
+    if (!connection) break;
+    nodes.push(...(connection.nodes || []));
+    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
+  }
+  article.metafields.nodes = nodes;
+  return article;
+}
+
 async function listAllSourceArticles(sourceClient) {
   const articles = [];
   let cursor = null;
@@ -162,6 +193,9 @@ async function listAllSourceArticles(sourceClient) {
     cursor = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
   } while (cursor);
 
+  for (const article of articles) {
+    await hydrateArticleMetafields(sourceClient, article);
+  }
   return articles;
 }
 
@@ -273,16 +307,20 @@ async function syncArticleMetafields(targetClient, ownerId, metafields) {
     return;
   }
 
-  const payload = await targetClient.query(
-    SET_METAFIELDS,
-    { metafields: inputs },
-    { isMutation: true, allowErrors: true },
-  );
-  const result = payload.data?.metafieldsSet;
-  if (result?.userErrors?.length) {
-    throw new Error(result.userErrors.map((e) => e.message).join('; '));
+  let setCount = 0;
+  for (let index = 0; index < inputs.length; index += 25) {
+    const payload = await targetClient.query(
+      SET_METAFIELDS,
+      { metafields: inputs.slice(index, index + 25) },
+      { isMutation: true, allowErrors: true },
+    );
+    const result = payload.data?.metafieldsSet;
+    if (result?.userErrors?.length) {
+      throw new Error(result.userErrors.map((e) => e.message).join('; '));
+    }
+    setCount += result?.metafields?.length || 0;
   }
-  log(`[metafields] Set ${result?.metafields?.length || 0} metafield(s)`);
+  log(`[metafields] Set ${setCount} metafield(s)`);
 }
 
 async function syncOneArticle(sourceClient, targetClient, sourceArticle, blogCache) {
@@ -394,10 +432,11 @@ async function main() {
     }
     log(`Found ${sourceArticles.length} article(s) to sync.`);
   } else {
-    const sourceArticle = await findArticleByHandle(sourceClient, ARTICLE_HANDLE);
+    let sourceArticle = await findArticleByHandle(sourceClient, ARTICLE_HANDLE);
     if (!sourceArticle) {
       throw new Error(`Source article not found for handle: ${ARTICLE_HANDLE}`);
     }
+    sourceArticle = await hydrateArticleMetafields(sourceClient, sourceArticle);
     sourceArticles = [sourceArticle];
   }
 

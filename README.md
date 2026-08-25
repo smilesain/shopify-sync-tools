@@ -69,7 +69,7 @@ node sync-console/server.mjs
 
 | 模块                         | 说明                         |
 | -------------------------- | -------------------------- |
-| Metaobject / Metafield     | 同步定义（schema）；可指定 type / namespace.key，留空则全部 |
+| Metaobject / Metafield     | 同步定义（schema）；Metaobject 可另同步实例数据；支持 type / namespace.key 过滤 |
 | Menu / Page / Blog Article | 按 handle，或一次性同步全部           |
 | Collection                 | 按 handle，或一次性同步全部；智能规则 / 手动成员映射 |
 | Product                    | 多个数字 ID，或一次性同步全部            |
@@ -85,9 +85,11 @@ cd custom-data-sync
 
 node sync.mjs --only metaobjects --types compliance_profile --dry-run
 node sync.mjs --only metafields --keys custom.color --dry-run
+node sync-metaobject-entries.mjs --types compliance_profile --dry-run
 node sync-page.mjs --all --dry-run
 node sync-article.mjs --all --dry-run
 node sync-collection.mjs --all --dry-run
+node sync-product.mjs 7549570941137 7549570941138 --dry-run
 node sync-product.mjs --all --dry-run
 node sync-menu.mjs --all --dry-run
 node sync-template-files.mjs --dir="E:\MyTheme\templates" product.foo.json --dry-run
@@ -100,4 +102,8 @@ node sync-template-files.mjs --dir="E:\MyTheme\templates" product.foo.json --dry
 - 默认只监听 `127.0.0.1`
 - `.env`、`sync-console/data/*.json` 不进 Git
 - 每人在自己电脑启动一份
+- 每个任务先执行店铺、认证和必要 scope 预检
+- Live 模式必须输入完整目标店铺域名二次确认
+
+同步请求会自动处理超时、网络故障、HTTP 429/5xx 和 GraphQL `THROTTLED`，并根据 Shopify API cost 动态限流。产品、集合、页面和文章的嵌套连接会继续分页，不再只读取首批数据。
 

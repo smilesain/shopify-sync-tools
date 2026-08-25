@@ -91,7 +91,7 @@ export function loadConfig() {
     source: loadStoreConfig('SOURCE'),
     target: loadStoreConfig('TARGET'),
     apiVersion: readEnv('SHOPIFY_API_VERSION') || '2025-01',
-    mutationDelayMs: Number(readEnv('MUTATION_DELAY_MS') || 200),
+    mutationDelayMs: Number(readEnv('MUTATION_DELAY_MS') || 0),
   };
 }
 
