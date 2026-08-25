@@ -307,6 +307,8 @@ async function startJob() {
     collectionSyncAll: $('#collectionSyncAll').checked,
     productSyncAll: $('#productSyncAll').checked,
     menuSyncAll: $('#menuSyncAll').checked,
+    metaobjectTypes: $('#metaobjectTypes').value.trim(),
+    metafieldKeys: $('#metafieldKeys').value.trim(),
     collectionHandle: $('#collectionHandle').value.trim() || 'robot-vacuums',
     productIds: $('#productIds').value.trim(),
     templatesDir: $('#templatesDir').value.trim(),

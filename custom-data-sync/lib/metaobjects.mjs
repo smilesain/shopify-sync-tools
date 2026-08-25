@@ -135,12 +135,33 @@ export async function syncMetaobjectDefinitions({
   targetClient,
   dryRun,
   report,
+  typeFilters = [],
 }) {
   console.log('\n[metaobjects] Exporting source definitions...');
-  const sourceDefinitions = await exportMetaobjectDefinitions(sourceClient);
+  let sourceDefinitions = await exportMetaobjectDefinitions(sourceClient);
 
   console.log('[metaobjects] Exporting target definitions...');
   const targetDefinitions = await exportMetaobjectDefinitions(targetClient);
+
+  if (typeFilters.length) {
+    const wanted = [...new Set(typeFilters.map((type) => metaobjectTypeKey(type)))];
+    const filtered = sourceDefinitions.filter((definition) =>
+      wanted.includes(metaobjectTypeKey(definition.type)),
+    );
+    const found = new Set(filtered.map((definition) => metaobjectTypeKey(definition.type)));
+    for (const type of wanted) {
+      if (!found.has(type)) {
+        report.metaobjects.failed.push({
+          type,
+          name: type,
+          errors: [{ message: `Not found on source: ${type}` }],
+        });
+        console.log(`[metaobjects] Missing on source: ${type}`);
+      }
+    }
+    console.log(`[metaobjects] Filter: ${filtered.length} of ${sourceDefinitions.length} definition(s)`);
+    sourceDefinitions = filtered;
+  }
 
   const targetByType = new Map(
     targetDefinitions.map((definition) => [metaobjectTypeKey(definition.type), definition]),

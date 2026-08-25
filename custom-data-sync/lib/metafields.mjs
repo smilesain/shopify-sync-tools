@@ -3,7 +3,7 @@ import {
   isAppOwnedNamespace,
   isRestrictedNamespace,
 } from './shopify-client.mjs';
-import { remapMetaobjectValidation } from './metaobjects.mjs';
+import { metafieldDefinitionMatches } from './definition-filters.mjs';
 
 const EXPORT_METAFIELD_DEFINITIONS = `
   query ExportMetafieldDefinitions($ownerType: MetafieldOwnerType!, $cursor: String) {
@@ -134,12 +134,34 @@ export async function syncMetafieldDefinitions({
   report,
   typeToTargetId,
   sourceTypeToId,
+  keySelectors = [],
 }) {
   console.log('\n[metafields] Exporting source definitions...');
-  const sourceDefinitions = await exportAllMetafieldDefinitions(sourceClient, ownerTypes);
+  let sourceDefinitions = await exportAllMetafieldDefinitions(sourceClient, ownerTypes);
 
   console.log('[metafields] Exporting target definitions...');
   const targetDefinitions = await exportAllMetafieldDefinitions(targetClient, ownerTypes);
+
+  if (keySelectors.length) {
+    const filtered = sourceDefinitions.filter((definition) =>
+      metafieldDefinitionMatches(definition, keySelectors),
+    );
+    for (const selector of keySelectors) {
+      const found = sourceDefinitions.some((definition) => metafieldDefinitionMatches(definition, [selector]));
+      if (!found) {
+        report.metafields.failed.push({
+          ownerType: selector.ownerType || '*',
+          namespace: selector.namespace,
+          key: selector.key,
+          name: selector.raw,
+          errors: [{ message: `Not found on source: ${selector.raw}` }],
+        });
+        console.log(`[metafields] Missing on source: ${selector.raw}`);
+      }
+    }
+    console.log(`[metafields] Filter: ${filtered.length} of ${sourceDefinitions.length} definition(s)`);
+    sourceDefinitions = filtered;
+  }
 
   const targetKeys = new Set(
     targetDefinitions.map((definition) =>

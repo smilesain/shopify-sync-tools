@@ -58,6 +58,7 @@ TARGET_ACCESS_TOKEN=shpat_xxx
 ## 功能
 
 - 勾选同步模块：Metaobject / Metafield / Menu / Page / Blog Article / Collection / Product / Template 图片 / Template 视频
+- Metaobject 定义可填 type（留空=全部）；Metafield 定义可填 namespace.key 或 OWNER:namespace.key（留空=全部）
 - Page 默认同步 handle=`about-us`（可改），或勾选一次性同步源站全部页面
 - Blog Article 默认同步 handle=`test`（可改）；勾选「一次性同步全部」则拉取源站所有文章逐条同步；若目标站缺少同 handle 的 Blog，会先创建 Blog
 - Collection 默认同步 handle=`robot-vacuums`（可改）；智能集合同步规则，手动集合按 product handle 映射成员；也可一次性同步全部

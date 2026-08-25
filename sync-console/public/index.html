@@ -70,10 +70,35 @@
             <h2>同步模块</h2>
             <p class="hint">按需勾选，只显示对应参数。新店建议：定义 → 产品 → 集合/内容 → 模板。</p>
             <div class="module-list" id="moduleList">
-              <div class="mod-row">
-                <label class="mod"><input type="checkbox" name="module" value="metaobjects" /> Metaobject 定义</label>
-                <label class="mod"><input type="checkbox" name="module" value="metafields" /> Metafield 定义</label>
+            <div class="mod-group">
+              <label class="mod"><input type="checkbox" name="module" value="metaobjects" /> Metaobject 定义</label>
+              <div class="mod-fields" data-for="metaobjects" hidden>
+                <div class="field-block tight">
+                  <label for="metaobjectTypes">Metaobject type（可多个）</label>
+                  <textarea
+                    id="metaobjectTypes"
+                    rows="3"
+                    placeholder="compliance_profile&#10;compliance_manufacturer"
+                  ></textarea>
+                  <p class="hint">填写 type（定义的唯一标识）。留空则同步全部；换行 / 逗号均可。</p>
+                </div>
               </div>
+            </div>
+
+            <div class="mod-group">
+              <label class="mod"><input type="checkbox" name="module" value="metafields" /> Metafield 定义</label>
+              <div class="mod-fields" data-for="metafields" hidden>
+                <div class="field-block tight">
+                  <label for="metafieldKeys">namespace.key（可多个）</label>
+                  <textarea
+                    id="metafieldKeys"
+                    rows="3"
+                    placeholder="custom.color&#10;PRODUCT:custom.spec"
+                  ></textarea>
+                  <p class="hint">单独 key 不唯一，请填 namespace.key；可加 ownerType，如 PRODUCT:custom.color。留空则同步全部。</p>
+                </div>
+              </div>
+            </div>
 
               <div class="mod-group">
                 <label class="mod"><input type="checkbox" name="module" value="product" /> Product 产品</label>

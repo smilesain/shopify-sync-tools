@@ -48,6 +48,8 @@ export function pickJobInputs(payload = {}) {
     productSyncAll: Boolean(payload.productSyncAll),
     menuSyncAll: Boolean(payload.menuSyncAll),
     menuHandle: payload.menuHandle || '',
+    metaobjectTypes: payload.metaobjectTypes || '',
+    metafieldKeys: payload.metafieldKeys || '',
     templatesDir: payload.templatesDir || '',
     templates: Array.isArray(payload.templates) ? payload.templates : [],
     templatePaths: payload.templatePaths || '',

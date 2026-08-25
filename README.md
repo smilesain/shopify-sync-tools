@@ -69,7 +69,7 @@ node sync-console/server.mjs
 
 | 模块                         | 说明                         |
 | -------------------------- | -------------------------- |
-| Metaobject / Metafield     | 同步定义（schema）               |
+| Metaobject / Metafield     | 同步定义（schema）；可指定 type / namespace.key，留空则全部 |
 | Menu / Page / Blog Article | 按 handle，或一次性同步全部           |
 | Collection                 | 按 handle，或一次性同步全部；智能规则 / 手动成员映射 |
 | Product                    | 多个数字 ID，或一次性同步全部            |
@@ -83,6 +83,8 @@ Template 媒体同步**不必**把本工具放进主题包内，在界面填写�
 ```bash
 cd custom-data-sync
 
+node sync.mjs --only metaobjects --types compliance_profile --dry-run
+node sync.mjs --only metafields --keys custom.color --dry-run
 node sync-page.mjs --all --dry-run
 node sync-article.mjs --all --dry-run
 node sync-collection.mjs --all --dry-run

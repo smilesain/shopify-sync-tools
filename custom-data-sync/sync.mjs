@@ -16,6 +16,7 @@ import {
   syncMetaobjectDefinitions,
 } from './lib/metaobjects.mjs';
 import { metaobjectTypeKey } from './lib/shopify-client.mjs';
+import { ownerTypesFromSelectors } from './lib/definition-filters.mjs';
 import {
   createEmptyReport,
   finalizeReport,
@@ -36,7 +37,7 @@ async function main() {
   }
 
   const config = loadConfig();
-  const ownerTypes = args.ownerTypes || METAFIELD_OWNER_TYPES;
+  const ownerTypes = args.ownerTypes || ownerTypesFromSelectors(args.metafieldKeys, METAFIELD_OWNER_TYPES);
   let report;
 
   try {
@@ -45,6 +46,12 @@ async function main() {
   console.log(`Target: ${config.target.shop}`);
   console.log(`API version: ${config.apiVersion}`);
   console.log(`Mode: ${args.dryRun ? 'DRY RUN' : 'LIVE'}`);
+  if (args.metaobjectTypes.length) {
+    console.log(`Metaobject types: ${args.metaobjectTypes.join(', ')}`);
+  }
+  if (args.metafieldKeys.length) {
+    console.log(`Metafield keys: ${args.metafieldKeys.map((item) => item.raw).join(', ')}`);
+  }
 
   console.log('\nAuthenticating stores...');
   const [sourceAccessToken, targetAccessToken] = await Promise.all([
@@ -83,6 +90,7 @@ async function main() {
       targetClient,
       dryRun: args.dryRun,
       report,
+      typeFilters: args.metaobjectTypes,
     });
 
     typeToTargetId = metaobjectResult.typeToTargetId;
@@ -109,6 +117,7 @@ async function main() {
       report,
       typeToTargetId,
       sourceTypeToId,
+      keySelectors: args.metafieldKeys,
     });
   }
 

@@ -40,6 +40,10 @@ import {
   reportListItem,
   writeJobReport,
 } from './lib/job-report.mjs';
+import {
+  parseMetaobjectTypes,
+  parseMetafieldSelectors,
+} from '../custom-data-sync/lib/definition-filters.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -282,27 +286,45 @@ function buildSteps(payload) {
   const { templatesDir, templates } = collectTemplateArgs(payload);
   /** @type {{ id: string, label: string, command: string, args: string[] }[]} */
   const steps = [];
+  const metaobjectTypes = modules.includes('metaobjects')
+    ? parseMetaobjectTypes(payload.metaobjectTypes)
+    : [];
+  const metafieldKeys = modules.includes('metafields')
+    ? parseMetafieldSelectors(payload.metafieldKeys)
+    : [];
+  const definitionFilterArgs = [
+    ...(metaobjectTypes.length ? ['--types', metaobjectTypes.join(',')] : []),
+    ...(metafieldKeys.length ? ['--keys', metafieldKeys.map((item) => item.raw).join(',')] : []),
+  ];
 
   if (modules.includes('metaobjects') && modules.includes('metafields')) {
+    const filters = [
+      metaobjectTypes.length ? `${metaobjectTypes.length} types` : 'all types',
+      metafieldKeys.length ? `${metafieldKeys.length} keys` : 'all keys',
+    ].join(', ');
     steps.push({
       id: 'custom-data',
-      label: 'Metafield + Metaobject definitions',
+      label: `Metafield + Metaobject definitions (${filters})`,
       command: process.execPath,
-      args: ['sync.mjs', ...dryArgs],
+      args: ['sync.mjs', ...definitionFilterArgs, ...dryArgs],
     });
   } else if (modules.includes('metaobjects')) {
     steps.push({
       id: 'metaobjects',
-      label: 'Metaobject definitions',
+      label: metaobjectTypes.length
+        ? `Metaobject definitions (${metaobjectTypes.length})`
+        : 'Metaobject definitions (all)',
       command: process.execPath,
-      args: ['sync.mjs', '--only', 'metaobjects', ...dryArgs],
+      args: ['sync.mjs', '--only', 'metaobjects', ...definitionFilterArgs, ...dryArgs],
     });
   } else if (modules.includes('metafields')) {
     steps.push({
       id: 'metafields',
-      label: 'Metafield definitions',
+      label: metafieldKeys.length
+        ? `Metafield definitions (${metafieldKeys.length})`
+        : 'Metafield definitions (all)',
       command: process.execPath,
-      args: ['sync.mjs', '--only', 'metafields', ...dryArgs],
+      args: ['sync.mjs', '--only', 'metafields', ...definitionFilterArgs, ...dryArgs],
     });
   }
 

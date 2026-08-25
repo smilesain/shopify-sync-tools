@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseMetaobjectTypes, parseMetafieldSelectors } from './definition-filters.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = join(__dirname, '..', '.env');
@@ -120,6 +121,8 @@ export function parseCliArgs(argv) {
     ownerTypes: null,
     reportPath: null,
     help: false,
+    metaobjectTypes: [],
+    metafieldKeys: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -142,6 +145,14 @@ export function parseCliArgs(argv) {
         break;
       case '--report':
         args.reportPath = argv[index + 1];
+        index += 1;
+        break;
+      case '--types':
+        args.metaobjectTypes = parseMetaobjectTypes(argv[index + 1] || '');
+        index += 1;
+        break;
+      case '--keys':
+        args.metafieldKeys = parseMetafieldSelectors(argv[index + 1] || '');
         index += 1;
         break;
       case '--help':
@@ -171,6 +182,8 @@ Options:
   --dry-run                 Preview changes without creating definitions
   --only metaobjects        Sync metaobject definitions only
   --only metafields         Sync metafield definitions only
+  --types type1,type2       Limit metaobject definitions by type
+  --keys ns.key,OWNER:ns.key  Limit metafield definitions by namespace.key
   --owner-types PRODUCT,... Limit metafield owner types
   --report ./report.json    Write sync report to a JSON file
   --help, -h                Show this help
