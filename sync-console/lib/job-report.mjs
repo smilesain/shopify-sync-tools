@@ -83,6 +83,7 @@ export function buildJobReport(job) {
     inputs: job.inputs || {},
     steps,
     summary,
+    outcomes: job.outcomes || { failed: [], skipped: [] },
     logCount: logs.length,
     logTail: logs.slice(-80),
     errors: logs.filter((line) => ERROR_RE.test(String(line))).slice(-40),

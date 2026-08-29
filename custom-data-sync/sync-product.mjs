@@ -2,6 +2,9 @@
 /**
  * Sync Product(s) from source → target.
  *
+ * Copies product fields, variants (including variant metafields),
+ * images, and merchant product metafields.
+ *
  * Usage:
  *   node sync-product.mjs [product-id] [--dry-run]
  *   node sync-product.mjs --all [--dry-run]
@@ -51,6 +54,7 @@ const FETCH_PRODUCT = `
       variants(first: 250) {
         pageInfo { hasNextPage endCursor }
         nodes {
+          id
           title
           sku
           barcode
@@ -99,6 +103,7 @@ const FETCH_PRODUCT_VARIANTS_PAGE = `
       variants(first: 250, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
+          id
           title
           sku
           barcode
@@ -116,6 +121,25 @@ const FETCH_PRODUCT_VARIANTS_PAGE = `
 const FETCH_PRODUCT_METAFIELDS_PAGE = `
   query ProductMetafieldsPage($id: ID!, $cursor: String) {
     product(id: $id) {
+      metafields(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          namespace
+          key
+          type
+          value
+          reference {
+            ... on Metaobject { handle type }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FETCH_VARIANT_METAFIELDS_PAGE = `
+  query VariantMetafieldsPage($id: ID!, $cursor: String) {
+    productVariant(id: $id) {
       metafields(first: 250, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -200,7 +224,20 @@ const CREATE_METAOBJECT = `
 const PRODUCT_SET = `
   mutation ProductSet($input: ProductSetInput!, $synchronous: Boolean!) {
     productSet(input: $input, synchronous: $synchronous) {
-      product { id handle title templateSuffix }
+      product {
+        id
+        handle
+        title
+        templateSuffix
+        variants(first: 250) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            sku
+            selectedOptions { name value }
+          }
+        }
+      }
       userErrors { field message code }
     }
   }
@@ -243,6 +280,23 @@ async function loadCompleteConnection(client, productId, initial, document, pick
   return nodes;
 }
 
+async function loadCompleteVariantMetafields(client, variantId) {
+  const nodes = [];
+  let cursor = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const payload = await client.query(FETCH_VARIANT_METAFIELDS_PAGE, { id: variantId, cursor });
+    const connection = payload.data?.productVariant?.metafields;
+    if (!connection) break;
+    nodes.push(...(connection.nodes || []));
+    hasNextPage = Boolean(connection.pageInfo?.hasNextPage);
+    cursor = connection.pageInfo?.endCursor ?? null;
+  }
+
+  return nodes;
+}
+
 async function hydrateProductConnections(client, product) {
   const [media, variants, metafields] = await Promise.all([
     loadCompleteConnection(
@@ -271,7 +325,33 @@ async function hydrateProductConnections(client, product) {
   product.media.nodes = media;
   product.variants.nodes = variants;
   product.metafields.nodes = metafields;
+
+  for (const variant of product.variants.nodes) {
+    variant.metafields = {
+      nodes: variant.id ? await loadCompleteVariantMetafields(client, variant.id) : [],
+    };
+  }
+
   return product;
+}
+
+function variantMatchKey(variant) {
+  const options = (variant.selectedOptions || [])
+    .map((opt) => `${String(opt.name || '').trim()}=${String(opt.value || '').trim()}`)
+    .join('|');
+  if (options) return `opt:${options}`;
+  if (variant.sku) return `sku:${String(variant.sku).trim()}`;
+  return '';
+}
+
+function collectMetaobjectReferences(product) {
+  const metafields = [
+    ...(product.metafields?.nodes || []),
+    ...(product.variants?.nodes || []).flatMap((variant) => variant.metafields?.nodes || []),
+  ];
+  return metafields
+    .filter((mf) => mf.type === 'metaobject_reference' && mf.reference)
+    .map((mf) => mf.reference);
 }
 
 function mediaKey(url) {
@@ -429,13 +509,13 @@ function buildProductSetInput(product, existingProductId) {
   return input;
 }
 
-function buildMetafieldInputs(productId, metafields, metaobjectIdMap) {
+function buildMetafieldInputs(ownerId, metafields, metaobjectIdMap) {
   return metafields
     .filter(shouldSyncMetafield)
     .map((mf) => {
       const namespace = mf.namespace.trim();
       const input = {
-        ownerId: productId,
+        ownerId,
         namespace,
         key: mf.key,
         type: mf.type,
@@ -452,6 +532,27 @@ function buildMetafieldInputs(productId, metafields, metaobjectIdMap) {
       return input;
     })
     .filter(Boolean);
+}
+
+function countSyncableMetafields(metafields, metaobjectIdMap) {
+  return buildMetafieldInputs('dry-run', metafields || [], metaobjectIdMap).length;
+}
+
+async function applyMetafields(targetClient, inputs, label) {
+  if (!inputs.length) return;
+  log(label, `Setting ${inputs.length} metafields...`);
+  for (let index = 0; index < inputs.length; index += 25) {
+    const chunk = inputs.slice(index, index + 25);
+    const mfPayload = await targetClient.query(
+      SET_METAFIELDS,
+      { metafields: chunk },
+      { isMutation: true, allowErrors: true },
+    );
+    const mfErrors = mfPayload.data?.metafieldsSet?.userErrors || [];
+    if (mfErrors.length) {
+      console.warn(`[${label}] Warnings:`, mfErrors.map((e) => e.message).join('; '));
+    }
+  }
 }
 
 async function listAllSourceProducts(sourceClient) {
@@ -481,9 +582,7 @@ async function syncOneProduct(sourceClient, targetClient, productGid, metaobject
 
   log('product', `Source: ${product.title} (${product.handle})`);
 
-  const metaobjectRefs = product.metafields.nodes
-    .filter((mf) => mf.type === 'metaobject_reference' && mf.reference)
-    .map((mf) => mf.reference);
+  const metaobjectRefs = collectMetaobjectReferences(product);
 
   const metaobjectIdMap = new Map();
   for (const ref of metaobjectRefs) {
@@ -510,9 +609,14 @@ async function syncOneProduct(sourceClient, targetClient, productGid, metaobject
   const productSetInput = buildProductSetInput(product, existingProduct?.id);
 
   if (dryRun) {
+    const productMetafieldCount = countSyncableMetafields(product.metafields.nodes, metaobjectIdMap);
+    const variantMetafieldCount = product.variants.nodes.reduce(
+      (sum, variant) => sum + countSyncableMetafields(variant.metafields?.nodes, metaobjectIdMap),
+      0,
+    );
     log('product', `[dry-run] Would ${existingProduct ? 'update' : 'create'} product ${product.handle}`);
     log('product', `[dry-run] Images: ${product.media.nodes.length}`);
-    log('product', `[dry-run] Metafields: ${buildMetafieldInputs('dry-run', product.metafields.nodes, metaobjectIdMap).length}`);
+    log('product', `[dry-run] Metafields: ${productMetafieldCount} product, ${variantMetafieldCount} variant`);
     return { handle: product.handle, action: existingProduct ? 'update' : 'create', ok: true };
   }
 
@@ -567,22 +671,40 @@ async function syncOneProduct(sourceClient, targetClient, productGid, metaobject
     product.metafields.nodes,
     metaobjectIdMap,
   );
+  await applyMetafields(targetClient, metafields, 'metafields');
 
-  if (metafields.length) {
-    log('metafields', `Setting ${metafields.length} metafields...`);
-    for (let index = 0; index < metafields.length; index += 25) {
-      const chunk = metafields.slice(index, index + 25);
-      const mfPayload = await targetClient.query(
-        SET_METAFIELDS,
-        { metafields: chunk },
-        { isMutation: true, allowErrors: true },
-      );
-      const mfErrors = mfPayload.data?.metafieldsSet?.userErrors || [];
-      if (mfErrors.length) {
-        console.warn('[metafields] Warnings:', mfErrors.map((e) => e.message).join('; '));
-      }
-    }
+  const targetVariants = await loadCompleteConnection(
+    targetClient,
+    targetProductId,
+    setResult.product.variants,
+    FETCH_PRODUCT_VARIANTS_PAGE,
+    (item) => item?.variants,
+  );
+  const targetVariantByKey = new Map();
+  for (const variant of targetVariants) {
+    const key = variantMatchKey(variant);
+    if (key && !targetVariantByKey.has(key)) targetVariantByKey.set(key, variant);
   }
+
+  const variantMetafields = [];
+  for (const sourceVariant of product.variants.nodes) {
+    const sourceMetafields = sourceVariant.metafields?.nodes || [];
+    if (!countSyncableMetafields(sourceMetafields, metaobjectIdMap)) continue;
+
+    const key = variantMatchKey(sourceVariant);
+    const targetVariant = key ? targetVariantByKey.get(key) : null;
+    if (!targetVariant?.id) {
+      console.warn(
+        `[metafields] No target variant matched "${sourceVariant.title || key || sourceVariant.sku}"; skipping variant metafields`,
+      );
+      continue;
+    }
+
+    const inputs = buildMetafieldInputs(targetVariant.id, sourceMetafields, metaobjectIdMap);
+    if (!inputs.length) continue;
+    variantMetafields.push(...inputs);
+  }
+  await applyMetafields(targetClient, variantMetafields, 'variant-metafields');
 
   log('product', `Admin: https://${targetClient.shop}/admin/products/${targetProductId.split('/').pop()}`);
   log('product', `Storefront: https://${targetClient.shop}/products/${product.handle}`);

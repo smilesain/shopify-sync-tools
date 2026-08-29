@@ -1,15 +1,31 @@
 #!/usr/bin/env node
 
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedMetaobjectType } from './lib/shopify-client.mjs';
 import { parseMetaobjectTypes } from './lib/definition-filters.mjs';
+import {
+  createFileCopyCache,
+  ensureFileOnTarget,
+  fileSourceUrl,
+  isFileNode,
+  loadFileNodes,
+  parseFileGids,
+} from './lib/copy-file.mjs';
 
 const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
-const typesArgIndex = rawArgs.indexOf('--types');
-const selectedTypes =
-  typesArgIndex >= 0 ? parseMetaobjectTypes(rawArgs[typesArgIndex + 1] || '') : [];
+function readFlag(flag) {
+  const index = rawArgs.indexOf(flag);
+  if (index < 0) return '';
+  return String(rawArgs[index + 1] || '').trim();
+}
+const selectedTypes = parseMetaobjectTypes(readFlag('--types'));
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const reportPath = readFlag('--report') || join(__dirname, 'reports', `entries-${Date.now()}.json`);
 
 const LIST_DEFINITIONS = `
   query MetaobjectTypes($cursor: String) {
@@ -17,6 +33,37 @@ const LIST_DEFINITIONS = `
       pageInfo { hasNextPage endCursor }
       nodes { type name }
     }
+  }
+`;
+
+const FILE_OR_METAOBJECT_REF = `
+  __typename
+  ... on Metaobject { id type handle }
+  ... on MediaImage {
+    id
+    alt
+    image { url }
+  }
+  ... on GenericFile {
+    id
+    alt
+    url
+    mimeType
+  }
+  ... on Video {
+    id
+    alt
+    filename
+    originalSource { url }
+    sources { url mimeType }
+    preview { image { url } }
+  }
+  ... on Model3d {
+    id
+    alt
+    filename
+    originalSource { url }
+    preview { image { url } }
   }
 `;
 
@@ -33,11 +80,11 @@ const LIST_ENTRIES = `
           type
           value
           reference {
-            ... on Metaobject { id type handle }
+            ${FILE_OR_METAOBJECT_REF}
           }
           references(first: 250) {
             nodes {
-              ... on Metaobject { id type handle }
+              ${FILE_OR_METAOBJECT_REF}
             }
           }
         }
@@ -70,6 +117,32 @@ function isListReference(type) {
   return /^list\./i.test(type || '');
 }
 
+function isFileReferenceType(type) {
+  const normalized = String(type || '').toLowerCase();
+  return normalized === 'file_reference' || normalized === 'list.file_reference';
+}
+
+function fieldFileGids(field) {
+  const fromRefs = isListReference(field.type)
+    ? (field.references?.nodes || []).filter(isFileNode).map((ref) => ref.id)
+    : isFileNode(field.reference)
+      ? [field.reference.id]
+      : [];
+  if (fromRefs.filter(Boolean).length) return fromRefs.filter(Boolean);
+  return parseFileGids(field.value);
+}
+
+function collectFileGids(entries) {
+  const ids = new Set();
+  for (const entry of entries) {
+    for (const field of entry.fields || []) {
+      if (!isFileReferenceType(field.type)) continue;
+      for (const id of fieldFileGids(field)) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 async function listTypes(client) {
   const definitions = await client.paginate(
     'metaobjectDefinitions',
@@ -91,7 +164,7 @@ async function listEntries(client, type) {
   );
 }
 
-function buildFields(sourceEntry, targetEntry, targetByHandle) {
+function buildFields(sourceEntry, targetEntry, targetByHandle, fileIdMap) {
   const targetFields = new Map(
     (targetEntry?.fields || []).map((field) => [field.key, field.value]),
   );
@@ -105,7 +178,25 @@ function buildFields(sourceEntry, targetEntry, targetByHandle) {
       continue;
     }
 
-    if (isListReference(field.type)) {
+    if (isFileReferenceType(field.type)) {
+      const sourceIds = fieldFileGids(field);
+      const emptyValue = !field.value || field.value === '[]';
+      if (!sourceIds.length && emptyValue) {
+        fields.push({
+          key: field.key,
+          value: isListReference(field.type) ? '[]' : '',
+        });
+        continue;
+      }
+      const ids = sourceIds.map((id) => fileIdMap.get(id)).filter(Boolean);
+      if (sourceIds.length && ids.length === sourceIds.length) {
+        fields.push({
+          key: field.key,
+          value: isListReference(field.type) ? JSON.stringify(ids) : ids[0],
+        });
+        continue;
+      }
+    } else if (isListReference(field.type)) {
       const refs = field.references?.nodes || [];
       if (!refs.length && (!field.value || field.value === '[]')) {
         fields.push({ key: field.key, value: '[]' });
@@ -165,6 +256,43 @@ async function upsertEntry(targetClient, sourceEntry, fields) {
   return result.metaobject;
 }
 
+function writeEntriesReport({ skipped, results }) {
+  const failedItems = results.filter((item) => !item.ok);
+  const report = {
+    kind: 'metaobject-entries',
+    dryRun,
+    finishedAt: new Date().toISOString(),
+    sourceCount: results.length + skipped.length,
+    skipped: skipped.map((item) => ({
+      type: item.type,
+      handle: item.handle || '*',
+      name: item.name || item.type,
+      reason: item.reason || 'SKIPPED',
+      message: item.message || '',
+    })),
+    failed: failedItems.map((item) => ({
+      type: item.type,
+      handle: item.handle,
+      name: `${item.type}/${item.handle}`,
+      reason: 'FAILED',
+      message: item.error || '',
+    })),
+    succeeded: results.filter((item) => item.ok).map((item) => ({
+      type: item.type,
+      handle: item.handle,
+      action: item.action,
+    })),
+  };
+
+  try {
+    mkdirSync(dirname(reportPath), { recursive: true });
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    console.log(`\nReport written to ${reportPath}`);
+  } catch (error) {
+    console.warn(`WARN: failed to write entries report: ${error.message}`);
+  }
+}
+
 async function main() {
   const config = loadConfig();
   const [sourceToken, targetToken] = await Promise.all([
@@ -190,9 +318,17 @@ async function main() {
 
   const sourceEntries = [];
   const targetByHandle = new Map();
+  const skipped = [];
   for (const type of types) {
     if (isRestrictedMetaobjectType(type)) {
       console.log(`[skip] Restricted/app-owned type: ${type}`);
+      skipped.push({
+        type,
+        handle: '*',
+        name: type,
+        reason: 'APP_OWNED_OR_RESERVED',
+        message: 'Shopify / App-owned metaobject types are skipped.',
+      });
       continue;
     }
     const [source, target] = await Promise.all([
@@ -206,6 +342,29 @@ async function main() {
     }
   }
 
+  const fileGids = collectFileGids(sourceEntries);
+  const sourceFiles = await loadFileNodes(sourceClient, fileGids);
+  const fileIdMap = new Map();
+  const fileCache = createFileCopyCache();
+  console.log(`[files] ${fileGids.length} unique file reference(s), loaded ${sourceFiles.length}`);
+
+  const loadedById = new Map(sourceFiles.map((ref) => [ref.id, ref]));
+  for (const sourceId of fileGids) {
+    const ref = loadedById.get(sourceId);
+    const label = ref?.filename || fileSourceUrl(ref) || sourceId;
+    if (!ref) {
+      console.warn(`[files] missing on source: ${sourceId}`);
+      continue;
+    }
+    try {
+      const targetId = await ensureFileOnTarget(targetClient, ref, { dryRun, cache: fileCache });
+      fileIdMap.set(sourceId, targetId);
+      console.log(`[files] ${dryRun ? 'would copy' : 'ready'} ${label}`);
+    } catch (error) {
+      console.warn(`[files] failed ${label}: ${error.message}`);
+    }
+  }
+
   let pending = [...sourceEntries];
   const results = [];
   while (pending.length) {
@@ -215,7 +374,7 @@ async function main() {
     for (const sourceEntry of pending) {
       const key = entryKey(sourceEntry.type, sourceEntry.handle);
       const existing = targetByHandle.get(key);
-      const built = buildFields(sourceEntry, existing, targetByHandle);
+      const built = buildFields(sourceEntry, existing, targetByHandle, fileIdMap);
       if (built.unresolved.length) {
         deferred.push({ sourceEntry, unresolved: built.unresolved });
         continue;
@@ -269,6 +428,7 @@ async function main() {
   const succeeded = results.filter((item) => item.ok).length;
   const failed = results.length - succeeded;
   console.log(`Done. ${succeeded} succeeded, ${failed} failed (of ${results.length}).`);
+  writeEntriesReport({ skipped, results });
   if (failed) process.exitCode = 1;
 }
 

@@ -436,6 +436,104 @@ button:disabled {
   margin-bottom: 10px;
 }
 
+.done-banner {
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+  background: color-mix(in srgb, var(--ok) 14%, var(--panel));
+}
+
+.done-banner.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--danger) 14%, var(--panel));
+}
+
+.done-banner.is-cancelled {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+}
+
+.done-banner strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.done-banner p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.outcome-panel {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+}
+
+.outcome-panel.is-ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+  background: color-mix(in srgb, var(--ok) 8%, var(--panel));
+}
+
+.outcome-panel h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.outcome-panel h3 span,
+.outcome-skipped summary span {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.outcome-empty {
+  margin: 0 0 8px;
+  color: var(--ok);
+  font-size: 13px;
+}
+
+.outcome-panel ul {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.outcome-panel li + li {
+  margin-top: 4px;
+}
+
+.outcome-panel .item-name {
+  font-family: var(--mono);
+}
+
+.outcome-panel .item-msg {
+  color: var(--muted);
+}
+
+.outcome-skipped {
+  margin-top: 10px;
+}
+
+.outcome-skipped summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.outcome-skipped ul {
+  margin-top: 8px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

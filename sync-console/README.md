@@ -67,7 +67,7 @@ TARGET_ACCESS_TOKEN=shpat_xxx
 - 选择 Templates：可填写本机 `templates` 目录路径并扫描；也可粘贴额外 JSON 绝对路径（工具不必放在主题包内）
 - Dry run / Live
 - 每个任务先运行店铺、认证与必要 scope 预检
-- Live 启动前必须输入完整目标店铺域名二次确认
+- Live 启动前会确认是否同步到所选目标站点
 - 实时日志（SSE）
 - 任务结束后静默写入 `custom-data-sync/reports/job-*.json`（界面不展示，出问题时可打开文件查看步骤和日志尾部）
 

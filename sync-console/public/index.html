@@ -229,7 +229,22 @@
         <section class="panel log-panel">
           <div class="log-head">
             <h2>运行日志</h2>
-            <span class="badge" id="jobBadge">idle</span>
+            <span class="badge" id="jobBadge">空闲</span>
+          </div>
+          <div id="doneBanner" class="done-banner" hidden>
+            <strong id="doneTitle">已导入完成</strong>
+            <p id="doneSub"></p>
+          </div>
+          <div id="outcomePanel" class="outcome-panel" hidden>
+            <div id="outcomeFailedWrap">
+              <h3>未导入成功 <span id="failedCount">0</span></h3>
+              <ul id="failedList"></ul>
+            </div>
+            <p id="outcomeEmpty" class="outcome-empty" hidden>没有导入失败项。</p>
+            <details id="skippedDetails" class="outcome-skipped" hidden>
+              <summary>已跳过 <span id="skippedCount">0</span> 项（已存在 / 不符合条件，不算失败）</summary>
+              <ul id="skippedList"></ul>
+            </details>
           </div>
           <pre class="log" id="logView">等待任务…</pre>
           <div class="job-meta" id="jobMeta"></div>

@@ -103,7 +103,7 @@ node sync-template-files.mjs --dir="E:\MyTheme\templates" product.foo.json --dry
 - `.env`、`sync-console/data/*.json` 不进 Git
 - 每人在自己电脑启动一份
 - 每个任务先执行店铺、认证和必要 scope 预检
-- Live 模式必须输入完整目标店铺域名二次确认
+- Live 模式会弹出确认：是否同步到所选目标站点
 
 同步请求会自动处理超时、网络故障、HTTP 429/5xx 和 GraphQL `THROTTLED`，并根据 Shopify API cost 动态限流。产品、集合、页面和文章的嵌套连接会继续分页，不再只读取首批数据。
 

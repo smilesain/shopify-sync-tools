@@ -121,26 +121,50 @@ export class ShopifyClient {
     return Math.ceil(((reserve - available) / restoreRate) * 1000);
   }
 
-  async paginate(connectionPath, document, variables, extractConnection) {
+  async paginate(connectionPath, document, variables, extractConnection, options = {}) {
+    const { allowErrors = false, skipIfAccessDenied = false, onPayload } = options;
     const items = [];
     let cursor = null;
     let hasNextPage = true;
 
     while (hasNextPage) {
-      const payload = await this.query(document, { ...variables, cursor });
-      const connection = extractConnection(payload.data);
+      const payload = await this.query(
+        document,
+        { ...variables, cursor },
+        { allowErrors: allowErrors || skipIfAccessDenied },
+      );
+      if (typeof onPayload === 'function') onPayload(payload);
 
+      const connection = extractConnection(payload.data);
       if (!connection) {
+        if (skipIfAccessDenied && (payload.errors || []).some(isAccessDeniedGraphqlError)) {
+          throw new AccessDeniedSkipError(
+            payload.errors.map((error) => error.message).join('; ') || 'Access denied',
+          );
+        }
         throw new Error(`Could not find connection at ${connectionPath}`);
       }
 
-      items.push(...(connection.nodes || []));
+      items.push(...(connection.nodes || []).filter(Boolean));
       hasNextPage = connection.pageInfo?.hasNextPage ?? false;
       cursor = connection.pageInfo?.endCursor ?? null;
     }
 
     return items;
   }
+}
+
+export class AccessDeniedSkipError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AccessDeniedSkipError';
+    this.code = 'ACCESS_DENIED_SKIP';
+  }
+}
+
+export function isAccessDeniedGraphqlError(error) {
+  const code = String(error?.extensions?.code || '').toUpperCase();
+  return code === 'ACCESS_DENIED' || /access denied/i.test(error?.message || '');
 }
 
 export function isAppOwnedNamespace(namespace) {

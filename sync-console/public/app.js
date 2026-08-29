@@ -9,10 +9,55 @@ const state = {
   savingSelection: false,
 };
 
+const BADGE_LABELS = {
+  idle: '空闲',
+  queued: '排队中',
+  running: '同步中',
+  success: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
 function setBadge(status) {
   const el = $('#jobBadge');
-  el.textContent = status || 'idle';
-  el.dataset.status = status || 'idle';
+  const key = status || 'idle';
+  el.textContent = BADGE_LABELS[key] || key;
+  el.dataset.status = key;
+}
+
+function hideDoneBanner() {
+  const banner = $('#doneBanner');
+  if (!banner) return;
+  banner.hidden = true;
+  banner.classList.remove('is-failed', 'is-cancelled');
+}
+
+function showDoneBanner(job) {
+  const banner = $('#doneBanner');
+  if (!banner) return;
+  const failedCount = job?.outcomes?.failed?.length || 0;
+  const skippedCount = job?.outcomes?.skipped?.length || 0;
+  const dry = Boolean(job?.dryRun);
+  banner.hidden = false;
+  banner.classList.toggle('is-failed', job.status === 'failed');
+  banner.classList.toggle('is-cancelled', job.status === 'cancelled');
+
+  if (job.status === 'cancelled') {
+    $('#doneTitle').textContent = '任务已取消';
+    $('#doneSub').textContent = '同步已中断，未完成的步骤没有继续执行。';
+  } else if (job.status === 'failed' || failedCount > 0) {
+    $('#doneTitle').textContent = dry ? 'Dry run 已结束，存在失败项' : '同步未完成';
+    $('#doneSub').textContent = failedCount
+      ? `有 ${failedCount} 项未导入成功，请查看下方清单和日志。`
+      : '任务失败，请查看右侧日志定位原因。';
+  } else {
+    $('#doneTitle').textContent = dry ? 'Dry run 已完成' : '已导入完成';
+    const skipHint = skippedCount ? `另有 ${skippedCount} 项已跳过（已存在或不符合条件）。` : '';
+    $('#doneSub').textContent = dry
+      ? `预览结束，没有写入目标站。${skipHint}`
+      : `全部步骤已跑完。${skipHint}`;
+  }
+  banner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function setError(message) {
@@ -200,6 +245,78 @@ function appendLog(line) {
 
 function resetLog() {
   $('#logView').textContent = '';
+  hideDoneBanner();
+  renderOutcomes(null);
+}
+
+const MODULE_LABELS = {
+  metaobjects: 'Metaobject 定义',
+  metafields: 'Metafield 定义',
+  'metaobject-entries': 'Metaobject 数据',
+  'custom-data': '定义',
+  product: 'Product',
+  'product-all': 'Product',
+  collection: 'Collection',
+  page: 'Page',
+  article: 'Article',
+  menu: 'Menu',
+};
+
+const REASON_LABELS = {
+  APP_OWNED: 'App 独占，需由对应 App 安装',
+  SHOPIFY_RESERVED: 'Shopify 保留，无法通过 Custom App 创建',
+  APP_OWNED_OR_RESERVED: 'App / Shopify 保留类型，已跳过',
+  ALREADY_EXISTS: '目标站已存在',
+  ACCESS_DENIED: '权限不足，已跳过该类型',
+  UNRESOLVED_VALIDATION: '无法映射 metaobject 校验到目标站',
+  FAILED: '导入失败',
+  SKIPPED: '已跳过',
+};
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function outcomeLine(item) {
+  const module = MODULE_LABELS[item.module] || item.module || '';
+  const reason = REASON_LABELS[item.reason] || item.reason || '';
+  const message = item.message && item.message !== item.reason ? item.message : '';
+  const detail = [reason, message].filter(Boolean).join(' · ');
+  return `<li><span class="item-name">${escapeHtml(item.name)}</span>${
+    module ? ` <span class="item-msg">(${escapeHtml(module)})</span>` : ''
+  }${detail ? `<div class="item-msg">${escapeHtml(detail)}</div>` : ''}</li>`;
+}
+
+function renderOutcomes(job) {
+  const panel = $('#outcomePanel');
+  const failedWrap = $('#outcomeFailedWrap');
+  const failedList = $('#failedList');
+  const skippedDetails = $('#skippedDetails');
+  const skippedList = $('#skippedList');
+  const empty = $('#outcomeEmpty');
+  if (!panel) return;
+
+  const failed = job?.outcomes?.failed || [];
+  const skipped = job?.outcomes?.skipped || [];
+  if (!failed.length && !skipped.length) {
+    panel.hidden = true;
+    panel.classList.remove('is-ok');
+    return;
+  }
+
+  panel.hidden = false;
+  panel.classList.toggle('is-ok', failed.length === 0);
+  $('#failedCount').textContent = String(failed.length);
+  failedWrap.hidden = failed.length === 0;
+  failedList.innerHTML = failed.map(outcomeLine).join('');
+  empty.hidden = failed.length > 0;
+  skippedDetails.hidden = skipped.length === 0;
+  $('#skippedCount').textContent = String(skipped.length);
+  skippedList.innerHTML = skipped.map(outcomeLine).join('');
 }
 
 function closeStream() {
@@ -230,6 +347,8 @@ function attachStream(jobId) {
   es.addEventListener('done', (event) => {
     const job = JSON.parse(event.data);
     setBadge(job.status);
+    showDoneBanner(job);
+    renderOutcomes(job);
     $('#cancelBtn').disabled = true;
     $('#startBtn').disabled = false;
     closeStream();
@@ -324,11 +443,11 @@ async function startJob() {
       setError('请先选择目标店铺');
       return;
     }
-    const confirmed = prompt(
-      `即将以 LIVE 模式写入目标店铺：\n${target.name} · ${target.shop}\n\n请输入完整目标店铺域名以确认：`,
+    const confirmed = confirm(
+      `即将以 LIVE 模式写入目标店铺：\n${target.name} · ${target.shop}\n\n确认同步到这个站点？`,
     );
-    if (String(confirmed || '').trim().toLowerCase() !== target.shop.toLowerCase()) {
-      setError('目标店铺确认不匹配，已取消 Live 同步');
+    if (!confirmed) {
+      setError('已取消 Live 同步');
       return;
     }
   }

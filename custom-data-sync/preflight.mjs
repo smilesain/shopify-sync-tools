@@ -56,7 +56,7 @@ const REQUIREMENTS = [
   {
     modules: ['metaobject-entries'],
     source: ['read_metaobjects'],
-    target: ['read_metaobjects', 'write_metaobjects'],
+    target: ['read_metaobjects', 'write_metaobjects', 'read_files', 'write_files'],
   },
 ];
 

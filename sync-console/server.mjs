@@ -16,6 +16,7 @@ import {
   readFileSync,
   statSync,
   createReadStream,
+  mkdirSync,
 } from 'node:fs';
 import { basename, extname, join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,12 @@ import {
   reportListItem,
   writeJobReport,
 } from './lib/job-report.mjs';
+import {
+  emptyOutcomes,
+  extractOutcomesFromReport,
+  mergeOutcomes,
+  parseFailedLogLines,
+} from './lib/item-outcomes.mjs';
 import {
   parseMetaobjectTypes,
   parseMetafieldSelectors,
@@ -522,6 +529,32 @@ function markRemainingSteps(job, status) {
   }
 }
 
+function argsWithReport(job, step) {
+  const reportSteps = new Set(['custom-data', 'metaobjects', 'metafields', 'metaobject-entries']);
+  if (!reportSteps.has(step.id)) return step.args;
+  mkdirSync(REPORTS_DIR, { recursive: true });
+  const reportPath = join(REPORTS_DIR, `${job.id}-${step.id}.json`);
+  step.reportPath = reportPath;
+  return [...step.args, '--report', reportPath];
+}
+
+function collectStepOutcomes(job, step, logStartIndex) {
+  job.outcomes = job.outcomes || emptyOutcomes();
+  if (step.reportPath && existsSync(step.reportPath)) {
+    try {
+      const extracted = extractOutcomesFromReport(readReportJson(step.reportPath), step.id);
+      mergeOutcomes(job.outcomes, extracted);
+      return;
+    } catch (error) {
+      appendLog(job, `WARN: could not read step report: ${error.message}`);
+    }
+  }
+  mergeOutcomes(job.outcomes, {
+    failed: parseFailedLogLines(job.logs.slice(logStartIndex), step.id),
+    skipped: [],
+  });
+}
+
 function persistJobReport(job) {
   try {
     const { name, path } = writeJobReport(job, REPORTS_DIR);
@@ -534,10 +567,11 @@ function persistJobReport(job) {
 
 function runCommand(job, step) {
   return new Promise((resolvePromise) => {
+    const args = argsWithReport(job, step);
     appendLog(job, `\n▶ ${step.label}`);
-    appendLog(job, `$ node ${step.args.join(' ')}`);
+    appendLog(job, `$ node ${args.join(' ')}`);
 
-    const child = spawn(step.command, step.args, {
+    const child = spawn(step.command, args, {
       cwd: SYNC_DIR,
       env: job.env || loadBaseEnv(),
       shell: false,
@@ -573,7 +607,9 @@ async function runJob(job, steps) {
       record.status = 'running';
       record.startedAt = new Date().toISOString();
     }
+    const logStartIndex = job.logs.length;
     const code = await runCommand(job, step);
+    collectStepOutcomes(job, step, logStartIndex);
     if (record) {
       record.finishedAt = new Date().toISOString();
       record.exitCode = code;
@@ -627,6 +663,7 @@ function jobPublic(job) {
     exitCode: job.exitCode ?? null,
     logCount: job.logs.length,
     reportName: job.reportName || null,
+    outcomes: job.outcomes || emptyOutcomes(),
   };
 }
 
@@ -852,6 +889,7 @@ async function handleApi(req, res, url) {
       logs: [],
       steps: plannedSteps(steps),
       inputs: pickJobInputs(payload),
+      outcomes: emptyOutcomes(),
       listeners: new Set(),
       env: jobEnv,
     };

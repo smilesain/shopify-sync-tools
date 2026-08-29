@@ -1,9 +1,12 @@
 import {
+  AccessDeniedSkipError,
   definitionKey,
+  isAccessDeniedGraphqlError,
   isAppOwnedNamespace,
   isRestrictedNamespace,
 } from './shopify-client.mjs';
 import { metafieldDefinitionMatches } from './definition-filters.mjs';
+import { remapMetaobjectValidation } from './metaobjects.mjs';
 
 const EXPORT_METAFIELD_DEFINITIONS = `
   query ExportMetafieldDefinitions($ownerType: MetafieldOwnerType!, $cursor: String) {
@@ -106,21 +109,59 @@ function hasUnresolvedValidations(definition, typeToTargetId, sourceTypeToId) {
 }
 
 export async function exportMetafieldDefinitionsForOwnerType(client, ownerType) {
+  let fieldAccessWarned = false;
+
   return client.paginate(
     `metafieldDefinitions.${ownerType}`,
     EXPORT_METAFIELD_DEFINITIONS,
     { ownerType },
-    (data) => data.metafieldDefinitions,
+    (data) => data?.metafieldDefinitions,
+    {
+      allowErrors: true,
+      skipIfAccessDenied: true,
+      onPayload(payload) {
+        if (fieldAccessWarned || !(payload.errors || []).some(isAccessDeniedGraphqlError)) return;
+        fieldAccessWarned = true;
+        console.warn(
+          `[metafields] ${ownerType}: some fields inaccessible on ${client.shop}; continuing with available data`,
+        );
+      },
+    },
   );
 }
 
-export async function exportAllMetafieldDefinitions(client, ownerTypes) {
+function recordOwnerTypeSkip(report, ownerType, side, message) {
+  report?.metafields.skipped.push({
+    ownerType,
+    namespace: '*',
+    key: '*',
+    name: ownerType,
+    reason: 'ACCESS_DENIED',
+    message: `${side}: ${message}`,
+  });
+}
+
+export async function exportAllMetafieldDefinitions(client, ownerTypes, report, side = client.shop) {
   const allDefinitions = [];
 
   for (const ownerType of ownerTypes) {
-    const definitions = await exportMetafieldDefinitionsForOwnerType(client, ownerType);
-    allDefinitions.push(...definitions);
-    console.log(`[metafields] ${ownerType}: ${definitions.length} definition(s)`);
+    try {
+      const definitions = await exportMetafieldDefinitionsForOwnerType(client, ownerType);
+      allDefinitions.push(...definitions);
+      console.log(`[metafields] ${ownerType}: ${definitions.length} definition(s)`);
+    } catch (error) {
+      if (
+        error instanceof AccessDeniedSkipError ||
+        error?.code === 'ACCESS_DENIED_SKIP' ||
+        /access denied/i.test(error?.message || '')
+      ) {
+        const message = error.message || 'Access denied';
+        console.warn(`[metafields] ${ownerType}: skipped (${message})`);
+        recordOwnerTypeSkip(report, ownerType, side, message);
+        continue;
+      }
+      throw error;
+    }
   }
 
   return allDefinitions;
@@ -137,10 +178,20 @@ export async function syncMetafieldDefinitions({
   keySelectors = [],
 }) {
   console.log('\n[metafields] Exporting source definitions...');
-  let sourceDefinitions = await exportAllMetafieldDefinitions(sourceClient, ownerTypes);
+  let sourceDefinitions = await exportAllMetafieldDefinitions(
+    sourceClient,
+    ownerTypes,
+    report,
+    'source',
+  );
 
   console.log('[metafields] Exporting target definitions...');
-  const targetDefinitions = await exportAllMetafieldDefinitions(targetClient, ownerTypes);
+  const targetDefinitions = await exportAllMetafieldDefinitions(
+    targetClient,
+    ownerTypes,
+    report,
+    'target',
+  );
 
   if (keySelectors.length) {
     const filtered = sourceDefinitions.filter((definition) =>
