@@ -5,11 +5,11 @@
  * and remaps manual product membership by product handle when possible.
  *
  * Usage:
- *   node sync-collection.mjs [collection-handle] [--dry-run]
- *   node sync-collection.mjs robot-vacuums --dry-run
+ *   node sync-collection.mjs [handle] [--dry-run]
+ *   node sync-collection.mjs robot-vacuums accessories --dry-run
  *   node sync-collection.mjs --all [--dry-run]
  *
- * Default handle: robot-vacuums
+ * Default handle (no args): robot-vacuums
  *
  * Requires: read_products on source; read_products + write_products on target
  * (and usually publication scopes to make collection visible on Online Store).
@@ -18,12 +18,14 @@
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedNamespace } from './lib/shopify-client.mjs';
+import { parseHandles } from './lib/definition-filters.mjs';
 
 const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
 const syncAll = rawArgs.includes('--all');
 const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
-const COLLECTION_HANDLE = (args[0] || 'robot-vacuums').trim().replace(/^\/+|\/+$/g, '');
+const parsedHandles = parseHandles(args);
+const COLLECTION_HANDLES = parsedHandles.length ? parsedHandles : syncAll ? [] : ['robot-vacuums'];
 
 const COLLECTION_FIELDS = `
   id
@@ -523,8 +525,8 @@ async function syncOneCollection(
 }
 
 async function main() {
-  if (!syncAll && !COLLECTION_HANDLE) {
-    throw new Error('Collection handle is required (or pass --all)');
+  if (!syncAll && !COLLECTION_HANDLES.length) {
+    throw new Error('At least one collection handle is required (or pass --all)');
   }
 
   const config = loadConfig();
@@ -553,11 +555,14 @@ async function main() {
   ]);
   log(`Target product index: ${productIndex.size}`);
 
-  log(syncAll ? 'Collection sync: ALL collections' : `Collection sync: ${COLLECTION_HANDLE}`);
+  log(
+    syncAll ? 'Collection sync: ALL collections' : `Collection sync: ${COLLECTION_HANDLES.join(', ')}`,
+  );
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
+  const results = [];
   let sourceCollections;
   if (syncAll) {
     log('Listing all source collections…');
@@ -568,15 +573,18 @@ async function main() {
     }
     log(`Found ${sourceCollections.length} collection(s) to sync.`);
   } else {
-    let source = await findCollectionByHandle(sourceClient, COLLECTION_HANDLE);
-    if (!source) {
-      throw new Error(`Source collection not found for handle: ${COLLECTION_HANDLE}`);
+    sourceCollections = [];
+    for (const handle of COLLECTION_HANDLES) {
+      let source = await findCollectionByHandle(sourceClient, handle);
+      if (!source) {
+        log(`FAILED ${handle}: Source collection not found`);
+        results.push({ handle, ok: false, error: `Source collection not found for handle: ${handle}` });
+        continue;
+      }
+      source = await hydrateCollectionConnections(sourceClient, source);
+      sourceCollections.push(source);
     }
-    source = await hydrateCollectionConnections(sourceClient, source);
-    sourceCollections = [source];
   }
-
-  const results = [];
   for (let i = 0; i < sourceCollections.length; i += 1) {
     const collection = sourceCollections[i];
     log(`\n[${i + 1}/${sourceCollections.length}]`);

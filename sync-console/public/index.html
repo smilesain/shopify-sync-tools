@@ -127,8 +127,13 @@
                 <label class="mod"><input type="checkbox" name="module" value="collection" /> Collection 集合</label>
                 <div class="mod-fields" data-for="collection" hidden>
                   <div class="field-block tight">
-                    <label for="collectionHandle">Collection handle</label>
-                    <input id="collectionHandle" type="text" value="robot-vacuums" placeholder="robot-vacuums" />
+                    <label for="collectionHandle">Collection handle（可多个）</label>
+                    <textarea
+                      id="collectionHandle"
+                      rows="3"
+                      placeholder="robot-vacuums&#10;accessories"
+                    >robot-vacuums</textarea>
+                    <p class="hint">换行 / 逗号 / 空格均可，按顺序逐个同步。</p>
                     <label class="dry nested-check">
                       <input type="checkbox" id="collectionSyncAll" />
                       一次性同步源站全部集合（忽略上方 handle）
@@ -141,8 +146,13 @@
                 <label class="mod"><input type="checkbox" name="module" value="page" /> Page 页面</label>
                 <div class="mod-fields" data-for="page" hidden>
                   <div class="field-block tight">
-                    <label for="pageHandle">Page handle</label>
-                    <input id="pageHandle" type="text" value="about-us" placeholder="about-us" />
+                    <label for="pageHandle">Page handle（可多个）</label>
+                    <textarea
+                      id="pageHandle"
+                      rows="3"
+                      placeholder="about-us&#10;store-locator"
+                    >about-us</textarea>
+                    <p class="hint">换行 / 逗号 / 空格均可，按顺序逐个同步。</p>
                     <label class="dry nested-check">
                       <input type="checkbox" id="pageSyncAll" />
                       一次性同步源站全部页面（忽略上方 handle）
@@ -155,8 +165,13 @@
                 <label class="mod"><input type="checkbox" name="module" value="article" /> Blog 文章</label>
                 <div class="mod-fields" data-for="article" hidden>
                   <div class="field-block tight">
-                    <label for="articleHandle">Blog article handle</label>
-                    <input id="articleHandle" type="text" value="test" placeholder="test" />
+                    <label for="articleHandle">Blog article handle（可多个）</label>
+                    <textarea
+                      id="articleHandle"
+                      rows="3"
+                      placeholder="test&#10;news"
+                    >test</textarea>
+                    <p class="hint">换行 / 逗号 / 空格均可，按顺序逐个同步。</p>
                     <label class="dry nested-check">
                       <input type="checkbox" id="articleSyncAll" />
                       一次性同步源站全部文章（忽略上方 handle）
@@ -169,8 +184,13 @@
                 <label class="mod"><input type="checkbox" name="module" value="menu" /> Menu 菜单</label>
                 <div class="mod-fields" data-for="menu" hidden>
                   <div class="field-block tight">
-                    <label for="menuHandle">Menu handle</label>
-                    <input id="menuHandle" type="text" placeholder="main-menu" />
+                    <label for="menuHandle">Menu handle（可多个）</label>
+                    <textarea
+                      id="menuHandle"
+                      rows="3"
+                      placeholder="main-menu&#10;footer"
+                    ></textarea>
+                    <p class="hint">换行 / 逗号 / 空格均可，按顺序逐个同步。</p>
                     <label class="dry nested-check">
                       <input type="checkbox" id="menuSyncAll" />
                       一次性同步源站全部菜单（忽略上方 handle）

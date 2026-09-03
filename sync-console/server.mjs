@@ -48,6 +48,7 @@ import {
   parseFailedLogLines,
 } from './lib/item-outcomes.mjs';
 import {
+  parseHandles,
   parseMetaobjectTypes,
   parseMetafieldSelectors,
 } from '../custom-data-sync/lib/definition-filters.mjs';
@@ -397,12 +398,16 @@ function buildSteps(payload) {
         args: ['sync-collection.mjs', '--all', ...dryArgs],
       });
     } else {
-      const handle = String(payload.collectionHandle || 'robot-vacuums').trim() || 'robot-vacuums';
+      const handles = parseHandles(payload.collectionHandle || 'robot-vacuums');
+      const selected = handles.length ? handles : ['robot-vacuums'];
       steps.push({
         id: 'collection',
-        label: `Collection: ${handle}`,
+        label:
+          selected.length === 1
+            ? `Collection: ${selected[0]}`
+            : `Collections: ${selected.length} selected`,
         command: process.execPath,
-        args: ['sync-collection.mjs', handle, ...dryArgs],
+        args: ['sync-collection.mjs', ...selected, ...dryArgs],
       });
     }
   }
@@ -417,12 +422,13 @@ function buildSteps(payload) {
         args: ['sync-page.mjs', '--all', ...dryArgs],
       });
     } else {
-      const handle = String(payload.pageHandle || 'about-us').trim() || 'about-us';
+      const handles = parseHandles(payload.pageHandle || 'about-us');
+      const selected = handles.length ? handles : ['about-us'];
       steps.push({
         id: 'page',
-        label: `Page: ${handle}`,
+        label: selected.length === 1 ? `Page: ${selected[0]}` : `Pages: ${selected.length} selected`,
         command: process.execPath,
-        args: ['sync-page.mjs', handle, ...dryArgs],
+        args: ['sync-page.mjs', ...selected, ...dryArgs],
       });
     }
   }
@@ -437,12 +443,16 @@ function buildSteps(payload) {
         args: ['sync-article.mjs', '--all', ...dryArgs],
       });
     } else {
-      const handle = String(payload.articleHandle || 'test').trim() || 'test';
+      const handles = parseHandles(payload.articleHandle || 'test');
+      const selected = handles.length ? handles : ['test'];
       steps.push({
         id: 'article',
-        label: `Blog article: ${handle}`,
+        label:
+          selected.length === 1
+            ? `Blog article: ${selected[0]}`
+            : `Blog articles: ${selected.length} selected`,
         command: process.execPath,
-        args: ['sync-article.mjs', handle, ...dryArgs],
+        args: ['sync-article.mjs', ...selected, ...dryArgs],
       });
     }
   }
@@ -457,13 +467,13 @@ function buildSteps(payload) {
         args: ['sync-menu.mjs', '--all', ...dryArgs],
       });
     } else {
-      const handle = String(payload.menuHandle || '').trim();
-      if (!handle) throw new Error('menuHandle is required when syncing menus');
+      const selected = parseHandles(payload.menuHandle || '');
+      if (!selected.length) throw new Error('Enter at least one menu handle');
       steps.push({
         id: 'menu',
-        label: `Menu: ${handle}`,
+        label: selected.length === 1 ? `Menu: ${selected[0]}` : `Menus: ${selected.length} selected`,
         command: process.execPath,
-        args: ['sync-menu.mjs', handle, ...dryArgs],
+        args: ['sync-menu.mjs', ...selected, ...dryArgs],
       });
     }
   }

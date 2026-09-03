@@ -5,21 +5,23 @@
  *
  * Usage:
  *   node sync-article.mjs [article-handle] [--dry-run]
- *   node sync-article.mjs test --dry-run
+ *   node sync-article.mjs test news --dry-run
  *   node sync-article.mjs --all [--dry-run]
  *
- * Default article handle: test
+ * Default article handle (no args): test
  */
 
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedNamespace } from './lib/shopify-client.mjs';
+import { parseHandles } from './lib/definition-filters.mjs';
 
 const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
 const syncAll = rawArgs.includes('--all');
 const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
-const ARTICLE_HANDLE = (args[0] || 'test').trim().replace(/^\/+|\/+$/g, '');
+const parsedHandles = parseHandles(args);
+const ARTICLE_HANDLES = parsedHandles.length ? parsedHandles : syncAll ? [] : ['test'];
 
 const ARTICLE_FIELDS = `
   id
@@ -392,8 +394,8 @@ async function syncOneArticle(sourceClient, targetClient, sourceArticle, blogCac
 }
 
 async function main() {
-  if (!syncAll && !ARTICLE_HANDLE) {
-    throw new Error('Article handle is required (or pass --all)');
+  if (!syncAll && !ARTICLE_HANDLES.length) {
+    throw new Error('At least one article handle is required (or pass --all)');
   }
 
   const config = loadConfig();
@@ -415,12 +417,13 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log(syncAll ? 'Article sync: ALL articles' : `Article sync: ${ARTICLE_HANDLE}`);
+  log(syncAll ? 'Article sync: ALL articles' : `Article sync: ${ARTICLE_HANDLES.join(', ')}`);
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
   const blogCache = new Map();
+  const results = [];
   let sourceArticles;
 
   if (syncAll) {
@@ -432,15 +435,18 @@ async function main() {
     }
     log(`Found ${sourceArticles.length} article(s) to sync.`);
   } else {
-    let sourceArticle = await findArticleByHandle(sourceClient, ARTICLE_HANDLE);
-    if (!sourceArticle) {
-      throw new Error(`Source article not found for handle: ${ARTICLE_HANDLE}`);
+    sourceArticles = [];
+    for (const handle of ARTICLE_HANDLES) {
+      let sourceArticle = await findArticleByHandle(sourceClient, handle);
+      if (!sourceArticle) {
+        log(`FAILED ${handle}: Source article not found`);
+        results.push({ handle, ok: false, error: `Source article not found for handle: ${handle}` });
+        continue;
+      }
+      sourceArticle = await hydrateArticleMetafields(sourceClient, sourceArticle);
+      sourceArticles.push(sourceArticle);
     }
-    sourceArticle = await hydrateArticleMetafields(sourceClient, sourceArticle);
-    sourceArticles = [sourceArticle];
   }
-
-  const results = [];
   for (let i = 0; i < sourceArticles.length; i += 1) {
     const article = sourceArticles[i];
     log(`\n[${i + 1}/${sourceArticles.length}]`);

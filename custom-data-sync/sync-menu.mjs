@@ -4,18 +4,23 @@
  *
  * Usage:
  *   node sync-menu.mjs [menu-handle] [--dry-run]
+ *   node sync-menu.mjs main-menu footer --dry-run
  *   node sync-menu.mjs --all [--dry-run]
+ *
+ * Default handle (no args): new-main-menu-2026-test
  */
 
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient } from './lib/shopify-client.mjs';
+import { parseHandles } from './lib/definition-filters.mjs';
 
 const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
 const syncAll = rawArgs.includes('--all');
 const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
-const MENU_HANDLE = (args[0] || 'new-main-menu-2026-test').trim();
+const parsedHandles = parseHandles(args);
+const MENU_HANDLES = parsedHandles.length ? parsedHandles : syncAll ? [] : ['new-main-menu-2026-test'];
 
 const MENU_ITEM_FRAGMENT = `
   fragment MenuItemFields on MenuItem {
@@ -305,8 +310,8 @@ async function syncOneMenu(sourceClient, targetClient, sourceMenu) {
 }
 
 async function main() {
-  if (!syncAll && !MENU_HANDLE) {
-    throw new Error('Menu handle is required (or pass --all)');
+  if (!syncAll && !MENU_HANDLES.length) {
+    throw new Error('At least one menu handle is required (or pass --all)');
   }
 
   const config = loadConfig();
@@ -328,11 +333,12 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log(syncAll ? 'Menu sync: ALL menus' : `Menu sync: ${MENU_HANDLE}`);
+  log(syncAll ? 'Menu sync: ALL menus' : `Menu sync: ${MENU_HANDLES.join(', ')}`);
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
+  const results = [];
   let sourceMenus;
   if (syncAll) {
     log('Listing all source menus…');
@@ -348,15 +354,18 @@ async function main() {
     }
     log(`Found ${sourceMenus.length} menu(s) to sync.`);
   } else {
-    log(`Fetching source menu: ${MENU_HANDLE} (${config.source.shop})`);
-    const sourceMenu = await fetchMenuByHandle(sourceClient, MENU_HANDLE);
-    if (!sourceMenu) {
-      throw new Error(`Source menu not found: ${MENU_HANDLE}`);
+    sourceMenus = [];
+    for (const handle of MENU_HANDLES) {
+      log(`Fetching source menu: ${handle} (${config.source.shop})`);
+      const sourceMenu = await fetchMenuByHandle(sourceClient, handle);
+      if (!sourceMenu) {
+        log(`FAILED ${handle}: Source menu not found`);
+        results.push({ handle, ok: false, error: `Source menu not found: ${handle}` });
+        continue;
+      }
+      sourceMenus.push(sourceMenu);
     }
-    sourceMenus = [sourceMenu];
   }
-
-  const results = [];
   for (let i = 0; i < sourceMenus.length; i += 1) {
     const menu = sourceMenus[i];
     log(`\n[${i + 1}/${sourceMenus.length}]`);

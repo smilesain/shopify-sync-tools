@@ -59,11 +59,11 @@ TARGET_ACCESS_TOKEN=shpat_xxx
 
 - 勾选同步模块：Metaobject 定义 / 数据、Metafield 定义、Menu、Page、Blog Article、Collection、Product、Template 图片 / 视频
 - Metaobject 定义和数据共用 type 过滤（留空=全部）；Metafield 定义可填 namespace.key 或 OWNER:namespace.key（留空=全部）
-- Page 默认同步 handle=`about-us`（可改），或勾选一次性同步源站全部页面
-- Blog Article 默认同步 handle=`test`（可改）；勾选「一次性同步全部」则拉取源站所有文章逐条同步；若目标站缺少同 handle 的 Blog，会先创建 Blog
-- Collection 默认同步 handle=`robot-vacuums`（可改）；智能集合同步规则，手动集合按 product handle 映射成员；也可一次性同步全部
+- Page 支持一次填多个 handle（留空默认 `about-us`），或勾选一次性同步源站全部页面
+- Blog Article 支持一次填多个 handle（留空默认 `test`）；勾选「一次性同步全部」则拉取源站所有文章逐条同步；若目标站缺少同 handle 的 Blog，会先创建 Blog
+- Collection 支持一次填多个 handle（留空默认 `robot-vacuums`）；智能集合同步规则，手动集合按 product handle 映射成员；也可一次性同步全部
 - Product 支持一次填多个数字 ID，或勾选一次性同步源站全部产品
-- Menu 填写 handle，或勾选一次性同步源站全部菜单
+- Menu 支持一次填多个 handle，或勾选一次性同步源站全部菜单
 - 选择 Templates：可填写本机 `templates` 目录路径并扫描；也可粘贴额外 JSON 绝对路径（工具不必放在主题包内）
 - Dry run / Live
 - 每个任务先运行店铺、认证与必要 scope 预检
@@ -91,7 +91,7 @@ API 客户端会自动重试超时、网络错误、429/5xx 和 GraphQL 限流�
 
 ```bash
 cd custom-data-sync
-node sync-page.mjs about-us --dry-run
+node sync-page.mjs about-us store-locator --dry-run
 node sync-page.mjs about-us
 node sync-page.mjs --all --dry-run
 node sync-page.mjs --all
@@ -103,7 +103,7 @@ node sync-page.mjs --all
 
 ```bash
 cd custom-data-sync
-node sync-article.mjs test --dry-run
+node sync-article.mjs test news --dry-run
 node sync-article.mjs test
 node sync-article.mjs --all --dry-run
 node sync-article.mjs --all
@@ -115,7 +115,7 @@ node sync-article.mjs --all
 
 ```bash
 cd custom-data-sync
-node sync-collection.mjs robot-vacuums --dry-run
+node sync-collection.mjs robot-vacuums accessories --dry-run
 node sync-collection.mjs robot-vacuums
 node sync-collection.mjs --all --dry-run
 node sync-collection.mjs --all
@@ -150,4 +150,4 @@ node sync-template-files.mjs "E:\MyTheme\templates\product.foo.json" --dry-run
 
 ## 说明
 
-Page / Blog Article / Collection / Menu / Product 均可单个同步，或使用 `--all` 一次同步源站全部。
+Page / Blog Article / Collection / Menu / Product 均可一次指定多个 handle（或产品 ID），或使用 `--all` 一次同步源站全部。

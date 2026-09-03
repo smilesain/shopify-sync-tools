@@ -7,6 +7,7 @@
  *
  * Usage:
  *   node sync-product.mjs [product-id] [--dry-run]
+ *   node sync-product.mjs 111 222 333 [--dry-run]
  *   node sync-product.mjs --all [--dry-run]
  */
 
@@ -740,7 +741,10 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log('product', syncAll ? 'Product sync: ALL products' : `Product sync: ${PRODUCT_ID}`);
+  log(
+    'product',
+    syncAll ? 'Product sync: ALL products' : `Product sync: ${PRODUCT_IDS.join(', ')}`,
+  );
   log('product', `Source: ${config.source.shop}`);
   log('product', `Target: ${config.target.shop}`);
   log('product', `Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);

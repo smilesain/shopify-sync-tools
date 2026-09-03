@@ -9,6 +9,18 @@ export function parseMetaobjectTypes(raw) {
   return [...new Set(splitTokens(raw).map((item) => item.replace(/^\/+|\/+$/g, '')))];
 }
 
+export function parseHandles(raw) {
+  const parts = Array.isArray(raw) ? raw : [raw];
+  return [
+    ...new Set(
+      parts
+        .flatMap((item) => splitTokens(item))
+        .map((item) => String(item).replace(/^\/+|\/+$/g, ''))
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export function parseMetafieldSelectors(raw) {
   return splitTokens(raw).map(parseMetafieldSelector);
 }

@@ -70,8 +70,8 @@ node sync-console/server.mjs
 | 模块                         | 说明                         |
 | -------------------------- | -------------------------- |
 | Metaobject / Metafield     | 同步定义（schema）；Metaobject 可另同步实例数据；支持 type / namespace.key 过滤 |
-| Menu / Page / Blog Article | 按 handle，或一次性同步全部           |
-| Collection                 | 按 handle，或一次性同步全部；智能规则 / 手动成员映射 |
+| Menu / Page / Blog Article | 多个 handle，或一次性同步全部           |
+| Collection                 | 多个 handle，或一次性同步全部；智能规则 / 手动成员映射 |
 | Product                    | 多个数字 ID，或一次性同步全部            |
 | Template 图片 / 视频           | 填写本机主题 `templates` 目录后扫描同步 |
 

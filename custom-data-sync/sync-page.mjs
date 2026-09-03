@@ -4,20 +4,23 @@
  *
  * Usage:
  *   node sync-page.mjs [handle] [--dry-run]
+ *   node sync-page.mjs about-us store-locator --dry-run
  *   node sync-page.mjs --all [--dry-run]
  *
- * Default handle: about-us
+ * Default handle (no args): about-us
  */
 
 import { loadConfig } from './lib/config.mjs';
 import { resolveStoreAccessToken } from './lib/auth.mjs';
 import { ShopifyClient, isRestrictedNamespace } from './lib/shopify-client.mjs';
+import { parseHandles } from './lib/definition-filters.mjs';
 
 const rawArgs = process.argv.slice(2);
 const dryRun = rawArgs.includes('--dry-run');
 const syncAll = rawArgs.includes('--all');
 const args = rawArgs.filter((arg) => arg !== '--dry-run' && arg !== '--all');
-const PAGE_HANDLE = (args[0] || 'about-us').trim().replace(/^\/+|\/+$/g, '');
+const parsedHandles = parseHandles(args);
+const PAGE_HANDLES = parsedHandles.length ? parsedHandles : syncAll ? [] : ['about-us'];
 
 const PAGE_FIELDS = `
   id
@@ -260,8 +263,8 @@ async function syncOnePage(sourceClient, targetClient, sourcePage) {
 }
 
 async function main() {
-  if (!syncAll && !PAGE_HANDLE) {
-    throw new Error('Page handle is required (or pass --all)');
+  if (!syncAll && !PAGE_HANDLES.length) {
+    throw new Error('At least one page handle is required (or pass --all)');
   }
 
   const config = loadConfig();
@@ -283,11 +286,12 @@ async function main() {
     mutationDelayMs: config.mutationDelayMs,
   });
 
-  log(syncAll ? 'Page sync: ALL pages' : `Page sync: ${PAGE_HANDLE}`);
+  log(syncAll ? 'Page sync: ALL pages' : `Page sync: ${PAGE_HANDLES.join(', ')}`);
   log(`Source: ${config.source.shop}`);
   log(`Target: ${config.target.shop}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'LIVE'}`);
 
+  const results = [];
   let sourcePages;
   if (syncAll) {
     log('Listing all source pages…');
@@ -298,15 +302,18 @@ async function main() {
     }
     log(`Found ${sourcePages.length} page(s) to sync.`);
   } else {
-    let sourcePage = await findPageByHandle(sourceClient, PAGE_HANDLE);
-    if (!sourcePage) {
-      throw new Error(`Source page not found for handle: ${PAGE_HANDLE}`);
+    sourcePages = [];
+    for (const handle of PAGE_HANDLES) {
+      let sourcePage = await findPageByHandle(sourceClient, handle);
+      if (!sourcePage) {
+        log(`FAILED ${handle}: Source page not found`);
+        results.push({ handle, ok: false, error: `Source page not found for handle: ${handle}` });
+        continue;
+      }
+      sourcePage = await hydratePageMetafields(sourceClient, sourcePage);
+      sourcePages.push(sourcePage);
     }
-    sourcePage = await hydratePageMetafields(sourceClient, sourcePage);
-    sourcePages = [sourcePage];
   }
-
-  const results = [];
   for (let i = 0; i < sourcePages.length; i += 1) {
     const page = sourcePages[i];
     log(`\n[${i + 1}/${sourcePages.length}]`);
